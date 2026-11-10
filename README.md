@@ -75,6 +75,20 @@ trips this app sends. The run warns about them until they're gone.
 3. Click "Run now". All trips are sent, and phone points during all of them are deleted.
 4. Set the limit back and restart.
 
+### Fixing old Shortcut points (once)
+
+Shortcut points from before its `tid` was set have no tracker id, so Dawarich keeps them in
+their own tracks (straight lines between two Shortcut points next to the app's track). This
+sends each of them again with the app's tracker id (one second later, because Dawarich refuses
+two points at the same time and place), then deletes the original. Originals are backed up to
+`deleted-points/` first; running it again is harmless.
+
+```sh
+docker compose exec dawarich-track-fixer python -m trackfixer fix-shortcut-tracker-ids \
+  --tracker-id <the app's tracker id> --since 2025-01-01            # dry run: shows counts per month
+# ...same command with --apply to do it, then "Recalculate tracks & stats" in Dawarich
+```
+
 ## Development
 
 ```sh

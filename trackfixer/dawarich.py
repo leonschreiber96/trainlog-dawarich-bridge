@@ -60,6 +60,10 @@ class DawarichClient:
             }
             for point in route_points
         ]
+        self.create_raw_points(locations)
+
+    def create_raw_points(self, locations):
+        """Send points already in the format of Dawarich's points API (GeoJSON features)."""
         for batch_start in range(0, len(locations), POINTS_PER_CREATE_REQUEST):
             batch = locations[batch_start : batch_start + POINTS_PER_CREATE_REQUEST]
             self._call("POST", "/api/v1/points", body={"locations": batch})

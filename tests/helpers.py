@@ -155,6 +155,27 @@ class FakeDawarich:
             self.next_id += 1
         self.points.sort(key=lambda point: point["timestamp"])
 
+    def create_raw_points(self, locations):
+        """Like Dawarich: a point at the same time and place as an existing one is skipped."""
+        existing = {(point["timestamp"], point["latitude"], point["longitude"]) for point in self.points}
+        for location in locations:
+            longitude, latitude = location["geometry"]["coordinates"]
+            properties = location["properties"]
+            point = {
+                "id": self.next_id,
+                "timestamp": properties["timestamp"],
+                "latitude": str(latitude),
+                "longitude": str(longitude),
+                "tracker_id": properties.get("device_id"),
+                "battery": int(properties["battery_level"] * 100) if properties.get("battery_level") else None,
+                "ssid": properties.get("wifi"),
+                "accuracy": properties.get("horizontal_accuracy"),
+            }
+            if (point["timestamp"], point["latitude"], point["longitude"]) not in existing:
+                self.points.append(point)
+                self.next_id += 1
+        self.points.sort(key=lambda point: point["timestamp"])
+
     def delete_points(self, point_ids):
         point_ids = set(point_ids)
         self.points = [point for point in self.points if point["id"] not in point_ids]
