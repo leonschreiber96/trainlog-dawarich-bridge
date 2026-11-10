@@ -34,16 +34,32 @@ class PhonePointsDuringTripTest(unittest.TestCase):
 
 
 class HealthCheckTest(unittest.TestCase):
-    def test_warns_when_shortcut_and_app_use_different_tracker_ids(self):
+    def test_warns_when_the_shortcut_sends_no_tracker_id(self):
         warnings = check_phone_tracker_ids(example_day_points())
         self.assertEqual(len(warnings), 1)
-        self.assertIn("(empty): 64 Shortcut points", warnings[0])
-        self.assertIn(f"{APP_TRACKER_ID}: 15 app points", warnings[0])
+        self.assertIn("without a tracker id", warnings[0])
 
     def test_no_warning_when_all_phone_points_share_one_tracker_id(self):
         points = [dict(point, tracker_id=APP_TRACKER_ID) if not point["tracker_id"] else point
                   for point in example_day_points()]
         self.assertEqual(check_phone_tracker_ids(points), [])
+
+    def test_no_warning_once_the_shortcut_was_fixed_during_the_day(self):
+        # Shortcut points before 13:00 still have no tracker id, later ones have the app's.
+        one_pm = example_day_points()[0]["timestamp"] + 13 * 60 * 60
+        points = [dict(point, tracker_id=APP_TRACKER_ID) if not point["tracker_id"] and point["timestamp"] > one_pm
+                  else point for point in example_day_points()]
+        self.assertEqual(check_phone_tracker_ids(points), [])
+
+    def test_warns_when_the_app_got_a_new_tracker_id(self):
+        # E.g. after reinstalling the app: the Shortcut still sends the old id.
+        points = [dict(point, tracker_id=APP_TRACKER_ID) if not point["tracker_id"] else point
+                  for point in example_day_points()]
+        points = [dict(point, tracker_id="NEW-APP-ID") if point["tracker_id"] == APP_TRACKER_ID
+                  and point["accuracy"] is not None else point for point in points]
+        warnings = check_phone_tracker_ids(points)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(f"sends tracker id {APP_TRACKER_ID}, but the Dawarich app now uses NEW-APP-ID", warnings[0])
 
     def test_shortcut_heartbeat(self):
         points = example_day_points()

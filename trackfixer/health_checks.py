@@ -3,7 +3,6 @@
 Each check returns a list of warning messages (empty if all is well).
 """
 
-from collections import Counter
 from datetime import datetime
 
 from .phone_points import is_trainlog_point
@@ -16,24 +15,29 @@ def looks_like_shortcut_point(point):
 
 def check_phone_tracker_ids(points):
     """The Shortcut's tid must match the Dawarich app's tracker id, otherwise Dawarich
-    keeps their points in separate tracks (e.g. after reinstalling the app)."""
-    phone_points = [point for point in points if not is_trainlog_point(point)]
-    counts = Counter()
-    for point in phone_points:
-        source = "Shortcut" if looks_like_shortcut_point(point) else "app"
-        counts[(point.get("tracker_id") or "", source)] += 1
+    keeps their points in separate tracks (e.g. after reinstalling the app).
 
-    tracker_ids = {tracker_id for tracker_id, _ in counts}
-    if len(tracker_ids) <= 1 and "" not in tracker_ids:
-        return []
+    Only the latest point of each is compared, so a fixed tid counts right away,
+    even while older points of the day still have the old one."""
+    phone_points = sorted((point for point in points if not is_trainlog_point(point)),
+                          key=lambda point: point["timestamp"])
+    shortcut_points = [point for point in phone_points if looks_like_shortcut_point(point)]
+    app_points = [point for point in phone_points if not looks_like_shortcut_point(point)]
+    if not shortcut_points:
+        return []  # check_shortcut_heartbeat reports that
 
-    details = ", ".join(
-        f"{tracker_id or '(empty)'}: {count} {source} points" for (tracker_id, source), count in sorted(counts.items())
-    )
-    return [
-        "Phone points of the last 24 hours have different or empty tracker ids, so Dawarich "
-        f"won't combine them into one track: {details}. Set the Shortcut's tid to the app's tracker id."
-    ]
+    shortcut_tracker_id = shortcut_points[-1].get("tracker_id") or ""
+    if not shortcut_tracker_id:
+        return ["The iOS Shortcut sends points without a tracker id, so Dawarich won't combine them with the "
+                "app's points into one track. Set the Shortcut's tid to the app's tracker id."]
+
+    if app_points:
+        app_tracker_id = app_points[-1].get("tracker_id") or ""
+        if app_tracker_id != shortcut_tracker_id:
+            return [f"The iOS Shortcut sends tracker id {shortcut_tracker_id}, but the Dawarich app now uses "
+                    f"{app_tracker_id or '(none)'}, so Dawarich keeps their points in separate tracks. "
+                    "Set the Shortcut's tid to the app's tracker id."]
+    return []
 
 
 def check_shortcut_heartbeat(points, start_timestamp, end_timestamp, max_silence_minutes):

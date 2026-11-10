@@ -57,6 +57,12 @@ Every night (and on "Run now" or a CSV upload):
 2. Copy `.env.example` next to it as `.env` and fill it in.
 3. `docker compose up -d --build`, then open `http://<homelab>:8000`.
 
+If the build fails with `additional privileges requested: pass "--allow=fs.read=..."`, add
+`COMPOSE_BAKE=false` to the `.env`: newer Docker Compose versions build with "bake", which
+won't read a build directory outside the compose directory without that permission.
+
+To update: `git pull` in this repository, then `docker compose up -d --build`.
+
 There's no login: only expose the port on the VPN.
 
 ### Moving existing trips over (once)
