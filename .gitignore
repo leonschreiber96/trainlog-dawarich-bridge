@@ -1,0 +1,21 @@
+# Secrets and personal configuration
+.env
+docker-compose.yml
+
+# App data when running outside Docker (DATA_DIRECTORY defaults to ./data)
+data/
+deleted-points/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors and macOS
+.vscode/
+.idea/
+.DS_Store

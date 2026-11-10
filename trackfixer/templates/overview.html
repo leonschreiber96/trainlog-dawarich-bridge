@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="cards">
+  <div class="card">
+    <dl>
+      <dt>Next nightly run</dt><dd>{{ next_run.strftime("%Y-%m-%d %H:%M") }}</dd>
+      <dt>Dawarich</dt><dd>{{ settings.dawarich_url }}</dd>
+      <dt>trainlog download</dt>
+      <dd>{% if settings.trainlog_download_configured %}as {{ settings.trainlog_username }}{% else %}<span class="muted">not configured, upload CSVs below</span>{% endif %}</dd>
+      <dt>Problem emails</dt>
+      <dd>{% if settings.email_configured %}to {{ settings.email_to }}{% else %}<span class="muted">not configured</span>{% endif %}</dd>
+      <dt>Trips</dt>
+      <dd>
+        {% for status, label in trip_status_labels.items() if trip_counts.get(status) %}
+          <a href="{{ url_for('trips', status=status) }}">{{ trip_counts[status] }} {{ label }}</a>{% if not loop.last %} · {% endif %}
+        {% else %}<span class="muted">none yet</span>{% endfor %}
+      </dd>
+    </dl>
+    <div class="form-row">
+      <form method="post" action="{{ url_for('start_run') }}"><button class="primary" {% if run_is_going %}disabled{% endif %}>Run now</button></form>
+      {% if settings.email_configured %}
+      <form method="post" action="{{ url_for('test_email') }}"><button>Send test email</button></form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('upload_csv') }}" enctype="multipart/form-data">
+      <strong>Upload a trainlog CSV export</strong>
+      <p class="muted" style="margin: 4px 0 0">New and changed trips are sent to Dawarich right away.</p>
+      <div class="form-row"><input type="file" name="trainlog_csv" accept=".csv,text/csv"></div>
+      <div class="form-row">
+        <label><input type="checkbox" name="is_complete_export" value="yes" checked>
+          It's a complete export: remove trips missing from it from Dawarich</label>
+      </div>
+      <div class="form-row"><button class="primary" {% if run_is_going %}disabled{% endif %}>Upload</button></div>
+    </form>
+  </div>
+</div>
+
+<h2>Runs</h2>
+{% if runs %}
+<div class="table-wrapper">
+<table>
+  <tr>
+    <th>Run</th><th>Started</th><th>Trigger</th><th>Outcome</th>
+    <th class="number">Trips sent</th><th class="number">Trips removed</th><th class="number">Phone points deleted</th><th class="number">Problems</th>
+  </tr>
+  {% for run in runs %}
+  <tr>
+    <td><a href="{{ url_for('run_details', run_id=run.id) }}">#{{ run.id }}</a></td>
+    <td class="nowrap">{{ run.started_at | local_time }}</td>
+    <td>{{ run.trigger }}</td>
+    <td><span class="badge {{ 'running-outcome' if run.outcome == 'running' else run.outcome }}">{{ run.outcome }}</span></td>
+    <td class="number">{{ run.trips_sent }}</td>
+    <td class="number">{{ run.trips_removed }}</td>
+    <td class="number">{{ run.phone_points_deleted }}</td>
+    <td class="number">{% if run.problem_count %}<a href="{{ url_for('run_details', run_id=run.id) }}">{{ run.problem_count }}</a>{% else %}0{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">No runs yet.</p>
+{% endif %}
+{% endblock %}

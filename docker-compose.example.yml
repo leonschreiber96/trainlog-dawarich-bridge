@@ -1,0 +1,14 @@
+# Copy into your config directory as docker-compose.yml (next to the .env file)
+# and adjust the two paths.
+services:
+  dawarich-track-fixer:
+    build: /path/to/dawarich-track-fixer        # this repository
+    container_name: dawarich-track-fixer
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - /path/to/data/dawarich-track-fixer:/data  # database, backups of deleted points
+    ports:
+      # Only reachable through the VPN: put the homelab's VPN address in front,
+      # e.g. "100.64.0.5:8000:8000" for Tailscale.
+      - "8000:8000"

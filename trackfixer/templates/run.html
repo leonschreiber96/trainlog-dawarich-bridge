@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} · Track fixer{% endblock %}
+{% block content %}
+<div class="card">
+  <dl>
+    <dt>Run</dt><dd>#{{ run.id }} ({{ run.trigger }})</dd>
+    <dt>Outcome</dt><dd><span class="badge {{ 'running-outcome' if run.outcome == 'running' else run.outcome }}">{{ run.outcome }}</span></dd>
+    <dt>Started</dt><dd>{{ run.started_at | local_time }}</dd>
+    <dt>Finished</dt><dd>{{ run.finished_at | local_time }}</dd>
+    <dt>Trips sent</dt><dd>{{ run.trips_sent }}</dd>
+    <dt>Trips removed</dt><dd>{{ run.trips_removed }}</dd>
+    <dt>Phone points deleted</dt><dd>{{ run.phone_points_deleted }}</dd>
+  </dl>
+</div>
+
+<h2>Events</h2>
+{% if events %}
+<div class="table-wrapper">
+<table>
+  <tr><th>Time</th><th>Level</th><th>Message</th></tr>
+  {% for event in events %}
+  <tr>
+    <td class="nowrap">{{ event.created_at | local_time }}</td>
+    <td><span class="badge {{ event.level }}">{{ event.level }}</span></td>
+    <td>{{ event.message }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">No events.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Trips · Track fixer{% endblock %}
+{% block content %}
+<div class="filters">
+  <a href="{{ url_for('trips') }}">{% if not selected_status %}<strong>All</strong>{% else %}All{% endif %}</a>
+  {% for status, label in trip_status_labels.items() if trip_counts.get(status) %}
+    <a href="{{ url_for('trips', status=status) }}">{% if selected_status == status %}<strong>{{ trip_counts[status] }} {{ label }}</strong>{% else %}{{ trip_counts[status] }} {{ label }}{% endif %}</a>
+  {% endfor %}
+</div>
+
+{% if trips %}
+<div class="table-wrapper">
+<table>
+  <tr>
+    <th>Start</th><th>Type</th><th>Route</th><th>Status</th>
+    <th class="number">Points</th><th class="number">Phone points deleted</th><th>Sent</th><th>Notes</th>
+  </tr>
+  {% for trip in trips %}
+  <tr>
+    <td class="nowrap">{{ trip.start_datetime[:16] if trip.start_datetime and trip.start_datetime|length > 2 else "" }}</td>
+    <td>{{ trip.trip_type }}</td>
+    <td>{{ trip.origin }} → {{ trip.destination }}</td>
+    <td><span class="badge {{ trip.status }}">{{ trip_status_labels.get(trip.status, trip.status) }}</span></td>
+    <td class="number">{{ trip.sent_point_count or "" }}</td>
+    <td class="number">{{ trip.phone_points_deleted or "" }}</td>
+    <td class="nowrap">{{ trip.sent_at | local_time }}</td>
+    <td class="muted">{{ trip.status_detail }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">No trips yet. They appear after the first run with a trainlog CSV.</p>
+{% endif %}
+{% endblock %}
