@@ -31,6 +31,25 @@ class TripSyncTest(unittest.TestCase):
         self.assertEqual(len(points_of_tracker(self.dawarich, "trainlog-1234")), len(expected_route))
         self.assertEqual(database.get_trip("1234")["status"], database.IN_DAWARICH)
 
+    def test_points_tell_dawarich_the_mode_of_transport(self):
+        sync_trips([example_bus_trip_row(), example_bus_trip_row(uid="2", type="walk", utc_start_datetime="2026-11-09 11:16:00",
+                                                                 utc_end_datetime="2026-11-09 11:25:00")],
+                   True, self.dawarich, new_run_log())
+
+        bus_hints = {str(point["motion_data"]) for point in points_of_tracker(self.dawarich, "trainlog-1234")}
+        walk_hints = {str(point["motion_data"]) for point in points_of_tracker(self.dawarich, "trainlog-2")}
+        self.assertEqual(bus_hints, {"{'activity': 'IN_BUS'}"})
+        self.assertEqual(walk_hints, {"{'motion': ['walking'], 'motion_authoritative': True}"})
+
+    def test_changing_the_trip_type_in_trainlog_sends_the_trip_again(self):
+        sync_trips([example_bus_trip_row()], True, self.dawarich, new_run_log())
+        log = new_run_log()
+        sync_trips([example_bus_trip_row(type="tram")], True, self.dawarich, log)
+
+        self.assertEqual(log.trips_sent, 1)
+        tram_hints = {str(point["motion_data"]) for point in points_of_tracker(self.dawarich, "trainlog-1234")}
+        self.assertEqual(tram_hints, {"{'activity': 'IN_TRAM'}"})
+
     def test_unchanged_trip_is_not_sent_again(self):
         sync_trips([example_bus_trip_row()], True, self.dawarich, new_run_log())
         points_before = points_of_tracker(self.dawarich, "trainlog-1234")

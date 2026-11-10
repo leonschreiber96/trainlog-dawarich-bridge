@@ -36,6 +36,10 @@ Every night (and on "Run now" or a CSV upload):
    removed (only for complete exports, and at most 10 at once). Places (restaurant, POI,
    accommodation), trips without exact times and future trips are not sent.
    No Dawarich imports are used, so nothing is left behind when a trip is replaced.
+   Each point carries the trip's mode of transport (`MOTION_HINTS_BY_TRIP_TYPE`): walk, cycle
+   and car trips are set for sure; for bus, train, tram, metro, ferry and flights Dawarich only
+   accepts a hint and may still detect something else. Wrong modes can be corrected in
+   Dawarich's UI; corrections survive track recalculation.
 3. **Delete phone points during trips** (`phone_point_cleanup.py`). For trips sent or taken in
    the last 30 days: every phone point inside the trip's time, plus those up to 3 minutes
    before/after that lie within 50 m of the route. Everything deleted is backed up to

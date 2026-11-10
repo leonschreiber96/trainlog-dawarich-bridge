@@ -39,14 +39,15 @@ class DawarichClient:
                 return points
             page += 1
 
-    def create_points(self, route_points, tracker_id):
+    def create_points(self, route_points, tracker_id, motion_hint=None):
         """Send route points (dicts with timestamp, latitude, longitude) as one tracker.
+        motion_hint: extra properties for every point that tell Dawarich the mode of transport.
         Dawarich skips points that already exist at the same time and place."""
         locations = [
             {
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [point["longitude"], point["latitude"]]},
-                "properties": {"timestamp": point["timestamp"], "device_id": tracker_id},
+                "properties": {"timestamp": point["timestamp"], "device_id": tracker_id, **(motion_hint or {})},
             }
             for point in route_points
         ]

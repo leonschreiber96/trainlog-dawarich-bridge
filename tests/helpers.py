@@ -142,7 +142,7 @@ class FakeDawarich:
     def get_points(self, start_timestamp, end_timestamp):
         return [point for point in self.points if start_timestamp <= point["timestamp"] <= end_timestamp]
 
-    def create_points(self, route_points, tracker_id):
+    def create_points(self, route_points, tracker_id, motion_hint=None):
         for route_point in route_points:
             self.points.append({
                 "id": self.next_id,
@@ -150,6 +150,7 @@ class FakeDawarich:
                 "latitude": str(route_point["latitude"]),
                 "longitude": str(route_point["longitude"]),
                 "tracker_id": tracker_id,
+                "motion_data": dict(motion_hint or {}),
             })
             self.next_id += 1
         self.points.sort(key=lambda point: point["timestamp"])

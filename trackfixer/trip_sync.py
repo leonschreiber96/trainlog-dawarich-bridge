@@ -16,8 +16,30 @@ from .phone_points import tracker_id_for_trip
 
 NOT_A_JOURNEY_TYPES = {"accommodation", "restaurant", "poi"}
 
+# What Dawarich's transportation mode detection is told about a trip's points, by trainlog trip type.
+# Walking, cycling and driving can be set for sure ("motion_authoritative"). For bus, train, boat and
+# flying, Dawarich only takes a hint that it weighs against the speeds it sees (Google's activity
+# names, see Dawarich's TransportationModes::HintScorer). Bus and boat are only ever chosen with such
+# a hint; trains, and slow trams and metros in particular, may still be detected as something else.
+MOTION_HINTS_BY_TRIP_TYPE = {
+    "train": {"activity": "IN_TRAIN"},
+    "rail": {"activity": "IN_TRAIN"},
+    "tram": {"activity": "IN_TRAM"},
+    "metro": {"activity": "IN_SUBWAY"},
+    "funicular": {"activity": "IN_RAIL_VEHICLE"},
+    "bus": {"activity": "IN_BUS"},
+    "ferry": {"activity": "IN_FERRY"},
+    "air": {"activity": "IN_AIRPLANE"},
+    "helicopter": {"activity": "FLYING"},
+    "car": {"motion": ["driving"], "motion_authoritative": True},
+    "cycle": {"motion": ["cycling"], "motion_authoritative": True},
+    "walk": {"motion": ["walking"], "motion_authoritative": True},
+}
+
 # Only these columns change a trip's points. Editing e.g. a note in trainlog changes nothing.
-FINGERPRINT_COLUMNS = ("path", "utc_start_datetime", "utc_end_datetime", "departure_delay", "arrival_delay", "waypoints")
+FINGERPRINT_COLUMNS = (
+    "path", "utc_start_datetime", "utc_end_datetime", "departure_delay", "arrival_delay", "waypoints", "type",
+)
 
 # Increase this after changing converter.py, so all trips get converted and sent again.
 CONVERTER_VERSION = 1
@@ -68,7 +90,8 @@ def sync_trip(row, dawarich, log):
         log.warning(f"Couldn't convert {describe_csv_row(row)}: {error}", uid)
         return
 
-    dawarich.create_points(route, tracker_id_for_trip(uid))
+    motion_hint = MOTION_HINTS_BY_TRIP_TYPE.get(row.get("type", ""), {})
+    dawarich.create_points(route, tracker_id_for_trip(uid), motion_hint)
     database.save_trip(row, fingerprint, database.IN_DAWARICH, "; ".join(converter_warnings))
     database.record_trip_sent(uid, fingerprint, route[0]["timestamp"], route[-1]["timestamp"], len(route))
     log.trips_sent += 1
