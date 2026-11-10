@@ -11,6 +11,7 @@ class RunLog:
     def __init__(self, run_id):
         self.run_id = run_id
         self.trips_sent = 0
+        self.trips_resent_after_app_update = 0
         self.trips_removed = 0
         self.phone_points_deleted = 0
         self.problems = []  # (level, message) of all warnings and errors

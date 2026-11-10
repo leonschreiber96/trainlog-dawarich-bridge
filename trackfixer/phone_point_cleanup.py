@@ -66,16 +66,16 @@ def remove_phone_points_during_trips(dawarich, settings, log):
         return
 
     backup_file = back_up_points(list(points_to_delete.values()), settings, log.run_id)
+    deleted_per_trip = Counter(trip_uid_of_point.values())
+    log.info(
+        f"Deleting {len(points_to_delete)} phone points recorded during {len(deleted_per_trip)} trips. "
+        f"Backup: {backup_file}"
+    )
     dawarich.delete_points(list(points_to_delete))
 
-    deleted_per_trip = Counter(trip_uid_of_point.values())
     for trip_uid, count in deleted_per_trip.items():
         database.add_phone_points_deleted(trip_uid, count)
     log.phone_points_deleted = len(points_to_delete)
-    log.info(
-        f"Deleted {len(points_to_delete)} phone points recorded during {len(deleted_per_trip)} trips. "
-        f"Backup: {backup_file}"
-    )
 
 
 def back_up_points(points, settings, run_id):

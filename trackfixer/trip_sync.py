@@ -63,6 +63,9 @@ def sync_trips(rows, is_complete_export, dawarich, log):
 
     log.info(f"The trainlog CSV has {len(trip_uids_in_export)} trips; "
              f"{log.trips_sent - trips_sent_before} were new or changed and sent to Dawarich.")
+    if log.trips_resent_after_app_update:
+        log.info(f"{log.trips_resent_after_app_update} of them didn't change in trainlog, but were sent again "
+                 "because this app now converts or sends trips differently (after an update of the app).")
     if is_complete_export:
         remove_trips_deleted_in_trainlog(trip_uids_in_export, dawarich, log)
 
@@ -76,7 +79,13 @@ def sync_trip(row, dawarich, log):
 
     if stored_trip is not None and stored_trip["sent_fingerprint"]:
         remove_trip_points(stored_trip, dawarich)
-        log.info(f"{describe_csv_row(row)} changed in trainlog; its points are replaced.", uid)
+        changed_columns = [column for column in FINGERPRINT_COLUMNS
+                           if json.loads(stored_trip["csv_row"]).get(column, "") != row.get(column, "")]
+        if changed_columns:
+            log.info(f"{describe_csv_row(row)} changed in trainlog ({', '.join(changed_columns)}); "
+                     "its points are replaced.", uid)
+        else:
+            log.trips_resent_after_app_update += 1
 
     status, reason = reason_not_to_send(row)
     if status:

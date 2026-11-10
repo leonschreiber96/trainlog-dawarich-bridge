@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 
 from trackfixer import database
 from trackfixer.converter import convert_trip
@@ -71,6 +72,25 @@ class TripSyncTest(unittest.TestCase):
         self.assertEqual(log.trips_sent, 1)
         self.assertEqual([point["timestamp"] for point in new_points], [point["timestamp"] for point in expected_route])
         self.assertEqual(new_points[-1]["timestamp"], old_points[-1]["timestamp"] + 120)
+
+    def test_a_change_in_trainlog_names_the_changed_columns(self):
+        sync_trips([example_bus_trip_row()], True, self.dawarich, new_run_log())
+        log = new_run_log()
+        sync_trips([example_bus_trip_row(arrival_delay="120")], True, self.dawarich, log)
+
+        messages = [event["message"] for event in database.run_events(log.run_id)]
+        self.assertTrue(any("changed in trainlog (arrival_delay)" in message for message in messages))
+
+    def test_trips_sent_again_after_an_app_update_are_not_blamed_on_trainlog(self):
+        sync_trips([example_bus_trip_row()], True, self.dawarich, new_run_log())
+        log = new_run_log()
+        with unittest.mock.patch("trackfixer.trip_sync.CONVERTER_VERSION", 2):
+            sync_trips([example_bus_trip_row()], True, self.dawarich, log)
+
+        messages = [event["message"] for event in database.run_events(log.run_id)]
+        self.assertEqual(log.trips_sent, 1)
+        self.assertFalse(any("changed in trainlog" in message for message in messages))
+        self.assertTrue(any("1 of them didn't change in trainlog" in message for message in messages))
 
     def test_trip_deleted_in_trainlog_is_removed_from_dawarich(self):
         sync_trips([example_bus_trip_row(), example_bus_trip_row(uid="99", utc_start_datetime="2026-11-09 11:16:00",
