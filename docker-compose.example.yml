@@ -10,5 +10,6 @@ services:
       - /path/to/data/dawarich-track-fixer:/data  # database, backups of deleted points
     ports:
       # Only reachable through the VPN: put the homelab's VPN address in front,
-      # e.g. "100.64.0.5:8000:8000" for Tailscale.
-      - "8000:8000"
+      # e.g. "100.64.0.5:${PORT:-8000}:${PORT:-8000}" for Tailscale.
+      # PORT comes from the .env file next to this file.
+      - "${PORT:-8000}:${PORT:-8000}"

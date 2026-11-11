@@ -11,4 +11,5 @@ COPY trackfixer ./trackfixer
 ENV PYTHONUNBUFFERED=1 \
     DATA_DIRECTORY=/data
 EXPOSE 8000
+# The port can be changed with PORT in .env.
 CMD ["python", "-m", "trackfixer"]

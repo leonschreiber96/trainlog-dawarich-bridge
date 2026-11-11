@@ -27,6 +27,7 @@ class Settings:
     email_from: str
     email_to: str
     app_url: str  # used for links in emails
+    port: int = 8000  # of the web UI
 
     @property
     def trainlog_download_configured(self):
@@ -78,4 +79,5 @@ def load_settings():
         email_from=text("EMAIL_FROM") or text("SMTP_USERNAME"),
         email_to=text("EMAIL_TO"),
         app_url=text("APP_URL").rstrip("/"),
+        port=number("PORT", 8000),
     )

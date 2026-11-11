@@ -19,9 +19,6 @@ from .config import load_settings
 from .dawarich import DawarichClient
 from .shortcut_tracker_ids import fix_shortcut_tracker_ids
 
-PORT = 8000
-
-
 def main():
     parser = argparse.ArgumentParser(prog="trackfixer", description="Keeps Dawarich in sync with trainlog.")
     commands = parser.add_subparsers(dest="command")
@@ -52,9 +49,9 @@ def main():
     database.mark_interrupted_runs_as_failed()
     scheduler.start_nightly_runs(settings)
     logging.getLogger("trackfixer").info(
-        "Web UI on port %s, nightly runs at %s", PORT, settings.nightly_run_time
+        "Web UI on port %s, nightly runs at %s", settings.port, settings.nightly_run_time
     )
-    waitress.serve(web.create_app(settings), host="0.0.0.0", port=PORT)
+    waitress.serve(web.create_app(settings), host="0.0.0.0", port=settings.port)
 
 
 if __name__ == "__main__":

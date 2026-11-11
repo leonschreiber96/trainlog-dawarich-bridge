@@ -55,7 +55,7 @@ Every night (and on "Run now" or a CSV upload):
 1. Copy `docker-compose.example.yml` to your config directory as `docker-compose.yml` and
    adjust the two paths (this repository, and the data directory).
 2. Copy `.env.example` next to it as `.env` and fill it in.
-3. `docker compose up -d --build`, then open `http://<homelab>:8000`.
+3. `docker compose up -d --build`, then open `http://<homelab>:8000` (or the `PORT` set in `.env`).
 
 If the build fails with `additional privileges requested: pass "--allow=fs.read=..."`, add
 `COMPOSE_BAKE=false` to the `.env`: newer Docker Compose versions build with "bake", which
