@@ -5,7 +5,7 @@ from trackfixer import database
 from trackfixer.converter import convert_trip
 from trackfixer.phone_point_cleanup import remove_phone_points_during_trips
 from trackfixer.run_log import RunLog
-from trackfixer.trip_sync import sync_trips
+from trackfixer.trip_sync import CONVERTER_VERSION, sync_trips
 
 from .helpers import FakeDawarich, example_bus_trip_row, example_day_points, temporary_settings
 
@@ -84,7 +84,7 @@ class TripSyncTest(unittest.TestCase):
     def test_trips_sent_again_after_an_app_update_are_not_blamed_on_trainlog(self):
         sync_trips([example_bus_trip_row()], True, self.dawarich, new_run_log())
         log = new_run_log()
-        with unittest.mock.patch("trackfixer.trip_sync.CONVERTER_VERSION", 2):
+        with unittest.mock.patch("trackfixer.trip_sync.CONVERTER_VERSION", CONVERTER_VERSION + 1):
             sync_trips([example_bus_trip_row()], True, self.dawarich, log)
 
         messages = [event["message"] for event in database.run_events(log.run_id)]

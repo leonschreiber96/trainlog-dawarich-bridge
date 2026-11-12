@@ -15,7 +15,10 @@ __pycache__/
 .venv/
 venv/
 
-# Editors and macOS
+# Editors and macOS (editor swap files can contain parts of .env)
 .vscode/
 .idea/
 .DS_Store
+*.swp
+*.swo
+*~

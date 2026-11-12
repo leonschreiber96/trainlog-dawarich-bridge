@@ -42,7 +42,7 @@ FINGERPRINT_COLUMNS = (
 )
 
 # Increase this after changing converter.py, so all trips get converted and sent again.
-CONVERTER_VERSION = 1
+CONVERTER_VERSION = 2
 
 # More trips than this missing from one export at once looks like an incomplete download.
 MAX_TRIPS_REMOVED_PER_RUN = 10

@@ -10,10 +10,13 @@ How the timestamps are made:
   delay, interpolated between the departure and arrival delay.
 * trainlog times are only minute-precise, so an anchor may move forward by up to
   59 seconds to keep all anchor times strictly increasing.
+* Two stops can even share a minute. So a section between two anchors may not be
+  faster than twice the trip's average speed; if the minute windows don't allow that,
+  the fastest section is made as slow as they allow.
 * Between two anchors, time is spread over the route by distance.
 * Finally the route is simplified: a vertex is only kept if it is needed to stay
   within 25 m of the real route, if it is an anchor, or as a checkpoint roughly
-  every 120 seconds.
+  every 120 seconds. No two points share a second.
 """
 
 import bisect
@@ -23,6 +26,7 @@ from datetime import datetime, timezone
 
 ENCODED_PATH_PRECISION = 5
 ANCHOR_TIME_WINDOW_SECONDS = 59
+MAX_SECTION_SPEED_FACTOR = 2
 SIMPLIFY_TOLERANCE_METERS = 25
 CHECKPOINT_INTERVAL_SECONDS = 120
 MAX_STOP_DISTANCE_FROM_ROUTE_METERS = 500
@@ -58,11 +62,12 @@ def convert_trip(row):
     anchors += stop_anchors(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings)
     anchors.append((len(route) - 1, actual_end))
 
-    anchor_times = fit_anchor_times(anchors)
+    average_speed = distance_along_route[-1] / (actual_end - actual_start)
+    anchor_times = fit_anchor_times(anchors, distance_along_route, average_speed)
     if anchor_times is None:
         warnings.append("Inconsistent waypoint timing; using delay-adjusted trip endpoints only")
         anchors = [anchors[0], anchors[-1]]
-        anchor_times = fit_anchor_times(anchors)
+        anchor_times = fit_anchor_times(anchors, distance_along_route, average_speed)
     if anchor_times is None:
         raise ValueError("Cannot reconcile endpoint times")
 
@@ -75,6 +80,7 @@ def convert_trip(row):
     anchor_indices = [index for index, _ in anchors]
     times = interpolate_times(route, distance_along_route, anchor_indices, anchor_times)
     kept_indices = simplify_route(route, times, anchor_indices)
+    kept_indices = drop_points_sharing_a_second(kept_indices, times, anchor_indices)
 
     route_points = [
         {"timestamp": times[index], "latitude": route[index][1], "longitude": route[index][0]}
@@ -217,24 +223,55 @@ def time_at_stop(stop, scheduled_start, scheduled_end, departure_delay, arrival_
     return None
 
 
-def fit_anchor_times(anchors):
+def fit_anchor_times(anchors, distance_along_route, average_speed):
     """Whole-second anchor times that strictly increase, each within the forward-only
-    minute window of its preferred time. None if that's impossible."""
-    earliest = [math.ceil(time) for _, time in anchors]
-    latest = [math.floor(time + ANCHOR_TIME_WINDOW_SECONDS) for _, time in anchors]
-    for i in range(1, len(earliest)):
-        earliest[i] = max(earliest[i], earliest[i - 1] + 1)
-    for i in range(len(latest) - 2, -1, -1):
-        latest[i] = min(latest[i], latest[i + 1] - 1)
-    if any(low > high for low, high in zip(earliest, latest)):
+    minute window of its preferred time. None if that's impossible.
+
+    Two stops can share a minute (e.g. both "10:01"), so each section between anchors
+    also gets a minimum duration: it may not be faster than MAX_SECTION_SPEED_FACTOR
+    times the trip's average speed. If the minute windows don't allow that, the fastest
+    section is made as slow as the windows allow."""
+    section_distances = [distance_along_route[end] - distance_along_route[start]
+                         for (start, _), (end, _) in zip(anchors, anchors[1:])]
+
+    def minimum_durations(speed_limit):
+        return [max(1, math.ceil(distance / speed_limit)) for distance in section_distances]
+
+    def time_ranges(durations):
+        earliest = [math.ceil(time) for _, time in anchors]
+        latest = [math.floor(time + ANCHOR_TIME_WINDOW_SECONDS) for _, time in anchors]
+        for i in range(1, len(earliest)):
+            earliest[i] = max(earliest[i], earliest[i - 1] + durations[i - 1])
+        for i in range(len(latest) - 2, -1, -1):
+            latest[i] = min(latest[i], latest[i + 1] - durations[i])
+        if any(low > high for low, high in zip(earliest, latest)):
+            return None
+        return earliest, latest
+
+    if time_ranges([1] * len(section_distances)) is None:
         return None
+
+    speed_limit = MAX_SECTION_SPEED_FACTOR * average_speed
+    if time_ranges(minimum_durations(speed_limit)) is None:
+        # Find the lowest speed limit the minute windows allow. At this speed every
+        # section needs at most 1 second, which always fits.
+        too_slow, fast_enough = speed_limit, max(section_distances)
+        for _ in range(60):
+            middle = (too_slow + fast_enough) / 2
+            if time_ranges(minimum_durations(middle)) is None:
+                too_slow = middle
+            else:
+                fast_enough = middle
+        speed_limit = fast_enough
+    durations = minimum_durations(speed_limit)
+    earliest, latest = time_ranges(durations)
 
     chosen = []
     is_endpoint = {0, len(anchors) - 1}
     for i, (_, time) in enumerate(anchors):
         # Trip endpoints prefer their exact time, stops the middle of their minute.
         preferred = round(time) if i in is_endpoint else math.floor(time + ANCHOR_TIME_WINDOW_SECONDS / 2)
-        minimum = max(earliest[i], chosen[-1] + 1 if chosen else earliest[i])
+        minimum = max(earliest[i], chosen[-1] + durations[i - 1] if chosen else earliest[i])
         chosen.append(min(latest[i], max(minimum, preferred)))
     return chosen
 
@@ -311,3 +348,18 @@ def simplify_route(route, times, anchor_indices):
             keep.add(farthest_index)
             sections_to_check.extend(((left, farthest_index), (farthest_index, right)))
     return sorted(keep)
+
+
+def drop_points_sharing_a_second(kept_indices, times, anchor_indices):
+    """Dawarich orders points by timestamp, so points in the same second can be drawn in
+    the wrong order. Keeps every anchor and drops other vertices that would share a second
+    with the point before them or with the next anchor."""
+    anchor_set = set(anchor_indices)
+    result = []
+    for index in kept_indices:
+        if index not in anchor_set:
+            next_anchor = anchor_indices[bisect.bisect_right(anchor_indices, index)]
+            if times[index] <= times[result[-1]] or times[index] >= times[next_anchor]:
+                continue
+        result.append(index)
+    return result
