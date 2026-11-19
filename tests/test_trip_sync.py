@@ -133,8 +133,8 @@ class PhonePointCleanupTest(unittest.TestCase):
         log = new_run_log()
         remove_phone_points_during_trips(dawarich, settings, log)
 
-        self.assertEqual(log.phone_points_deleted, 8)
-        self.assertEqual(database.get_trip("1234")["phone_points_deleted"], 8)
+        self.assertEqual(log.phone_points_deleted, 7)  # the point getting off at the stop is kept
+        self.assertEqual(database.get_trip("1234")["phone_points_deleted"], 7)
         self.assertEqual(len(list(settings.deleted_points_directory.glob("*.json"))), 1)
         # The old trainlog import of the example day is still there, which is reported.
         self.assertIn("old trainlog imports", log.problems[0][1])

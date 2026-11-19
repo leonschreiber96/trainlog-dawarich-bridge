@@ -4,7 +4,8 @@ from trackfixer.converter import convert_trip
 from trackfixer.health_checks import check_phone_tracker_ids, check_shortcut_heartbeat
 from trackfixer.phone_points import phone_points_during_trip, trip_time_looks_wrong
 
-from .helpers import APP_TRACKER_ID, encode_path, example_bus_trip_row, example_day_points
+from .helpers import (APP_TRACKER_ID, encode_path, example_bus_trip_row, example_day_points,
+                      meters_to_latitude_longitude, position_along_bus_route)
 
 
 def berlin_time(timestamp):
@@ -17,11 +18,29 @@ class PhonePointsDuringTripTest(unittest.TestCase):
         route, _ = convert_trip(example_bus_trip_row())
         found = phone_points_during_trip(route, example_day_points())
 
+        # 12:25:33 (getting off at the destination stop, just after trainlog's arrival time)
+        # is kept: the walk from the stop starts there.
         self.assertEqual(
             [berlin_time(point["timestamp"]) for point in found],
-            ["12:16:41", "12:17:41", "12:19:48", "12:20:52", "12:21:56", "12:23:04", "12:24:15", "12:25:33"],
+            ["12:16:41", "12:17:41", "12:19:48", "12:20:52", "12:21:56", "12:23:04", "12:24:15"],
         )
         self.assertFalse(trip_time_looks_wrong(route, found))
+
+    def test_points_on_the_route_just_outside_the_trip_time_are_only_kept_at_the_station(self):
+        # Just before departure and just after arrival, both on the route.
+        route, _ = convert_trip(example_bus_trip_row())
+        trip_start, trip_end = route[0]["timestamp"], route[-1]["timestamp"]
+
+        def phone_point(timestamp, position):
+            latitude, longitude = meters_to_latitude_longitude(position)
+            return {"timestamp": timestamp, "latitude": str(latitude), "longitude": str(longitude),
+                    "tracker_id": APP_TRACKER_ID}
+
+        waiting_at_the_stop = phone_point(trip_start - 60, position_along_bus_route(0.02))  # ~40 m from the stop
+        getting_off = phone_point(trip_end + 60, position_along_bus_route(0.98))  # ~40 m from the stop
+        still_on_the_bus = phone_point(trip_end + 60, position_along_bus_route(0.85))  # ~270 m before the stop
+        found = phone_points_during_trip(route, [waiting_at_the_stop, getting_off, still_on_the_bus])
+        self.assertEqual(found, [still_on_the_bus])
 
     def test_a_trip_logged_at_the_wrong_time_is_recognized(self):
         # A trip at the same time as the bus ride, but about 5 km away: the phone was

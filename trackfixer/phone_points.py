@@ -17,6 +17,11 @@ TRAINLOG_TRACKER_PREFIX = "trainlog-"
 TIME_BUFFER_SECONDS = 3 * 60
 MAX_DISTANCE_FROM_ROUTE_METERS = 50
 
+# ...except at the station itself: a point there just before departure or just after arrival
+# is you waiting or getting off. It's where your walk to or from the station starts, so it
+# stays. (Platforms are long, and the station's position in trainlog is just one spot of it.)
+STATION_RADIUS_METERS = 150
+
 # If most phone points recorded during a trip are this far from its route, the trip's
 # time in trainlog is probably wrong (wrong day, time zone...). Nothing gets deleted then.
 FAR_FROM_ROUTE_METERS = 1000
@@ -35,7 +40,7 @@ def is_trainlog_point(point):
 
 def phone_points_during_trip(route, points_around_trip):
     """Phone points recorded while riding: all of them inside the trip's time, plus
-    those just before or after it that lie on the route."""
+    those just before or after it that lie on the route, away from the station."""
     trip_start = route[0]["timestamp"]
     trip_end = route[-1]["timestamp"]
 
@@ -47,9 +52,16 @@ def phone_points_during_trip(route, points_around_trip):
         inside_buffer_time = trip_start - TIME_BUFFER_SECONDS <= point["timestamp"] <= trip_end + TIME_BUFFER_SECONDS
         if inside_trip_time:
             found.append(point)
-        elif inside_buffer_time and distance_to_route_meters(point, route) <= MAX_DISTANCE_FROM_ROUTE_METERS:
+        elif (inside_buffer_time and distance_to_route_meters(point, route) <= MAX_DISTANCE_FROM_ROUTE_METERS
+              and not at_station(point, route)):
             found.append(point)
     return found
+
+
+def at_station(point, route):
+    """For a point before the trip: is it at the departure station? After the trip: at the arrival station?"""
+    station = route[0] if point["timestamp"] < route[0]["timestamp"] else route[-1]
+    return distance_to_segment_meters(point, station, station) <= STATION_RADIUS_METERS
 
 
 def trip_time_looks_wrong(route, phone_points):

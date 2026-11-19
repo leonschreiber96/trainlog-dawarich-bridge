@@ -42,7 +42,8 @@ Every night (and on "Run now" or a CSV upload):
    Dawarich's UI; corrections survive track recalculation.
 3. **Delete phone points during trips** (`phone_point_cleanup.py`). For trips sent or taken in
    the last 30 days: every phone point inside the trip's time, plus those up to 3 minutes
-   before/after that lie within 50 m of the route. Everything deleted is backed up to
+   before/after that lie within 50 m of the route, except those within 150 m of the departure or
+   arrival station (waiting or getting off: your walk starts there). Everything deleted is backed up to
    `deleted-points/` first. Nothing is deleted for a trip if most of its phone points are over
    1 km from the route (the trip's time in trainlog is probably wrong), or if a run would
    delete more than `MAX_PHONE_POINTS_DELETED_PER_RUN` points.
