@@ -47,6 +47,11 @@ Every night (and on "Run now" or a CSV upload):
    `deleted-points/` first. Nothing is deleted for a trip if most of its phone points are over
    1 km from the route (the trip's time in trainlog is probably wrong), or if a run would
    delete more than `MAX_PHONE_POINTS_DELETED_PER_RUN` points.
+   For the same trips, once sent over an hour ago, it checks that Dawarich made a track from the
+   trip and cut the phone's track where the trip is. Dawarich only cuts the phone's track there if
+   the trip has a track; otherwise, after the phone points are deleted, the phone's track runs
+   in a straight line from where the trip starts to where it ends. "Recalculate tracks & stats"
+   in Dawarich repairs both.
 4. **Health checks** (`health_checks.py`) on the last 24 hours: app and Shortcut points use the
    same tracker id, and the Shortcut didn't go silent for more than an hour.
 5. **Email** if anything above produced a warning or error.

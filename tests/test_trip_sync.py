@@ -156,6 +156,27 @@ class PhonePointCleanupTest(unittest.TestCase):
         self.assertEqual(len(dawarich.points), len(example_day_points()) + len(expected_route))
         self.assertTrue(log.has_errors)
 
+    def test_reports_a_trip_dawarich_made_no_track_from_once_it_had_time_for_that(self):
+        settings = temporary_settings()
+        dawarich = FakeDawarich(example_day_points())
+        sync_trips([example_bus_trip_row()], True, dawarich, new_run_log())
+        remove_phone_points_during_trips(dawarich, settings, new_run_log())
+        for point in dawarich.points:
+            point["track_id"] = None if point["tracker_id"] == "trainlog-1234" else 1
+
+        def track_warnings(log):
+            return [message for _, message in log.problems if "belong to no track" in message]
+
+        just_sent_log = new_run_log()
+        remove_phone_points_during_trips(dawarich, settings, just_sent_log)
+        self.assertEqual(track_warnings(just_sent_log), [])
+
+        with database.connect() as connection:
+            connection.execute("UPDATE trips SET sent_at = '2026-11-10T12:00:00+00:00'")
+        later_log = new_run_log()
+        remove_phone_points_during_trips(dawarich, settings, later_log)
+        self.assertEqual(len(track_warnings(later_log)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

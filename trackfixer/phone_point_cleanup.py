@@ -6,12 +6,15 @@ from datetime import datetime, timedelta, timezone
 
 from . import database
 from .converter import convert_trip
-from .phone_points import TIME_BUFFER_SECONDS, phone_points_during_trip, trip_time_looks_wrong
+from .health_checks import TRACK_GAP_SECONDS, check_trip_tracks
+from .phone_points import phone_points_during_trip, trip_time_looks_wrong
 from .trip_sync import describe_stored_trip
 
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
+# Whether Dawarich made proper tracks from them is checked too, once it had time for that.
 RECHECK_DAYS = 30
+TIME_FOR_DAWARICH_TO_BUILD_TRACKS = timedelta(hours=1)
 
 # Points of trips imported before this app existed. They duplicate the trips this app sends.
 OLD_TRAINLOG_IMPORT_TRACKER_ID = "trainlog-csv"
@@ -28,13 +31,16 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     for trip in trips:
         route, _ = convert_trip(json.loads(trip["csv_row"]))
         points_around_trip = dawarich.get_points(
-            route[0]["timestamp"] - TIME_BUFFER_SECONDS, route[-1]["timestamp"] + TIME_BUFFER_SECONDS
+            route[0]["timestamp"] - TRACK_GAP_SECONDS, route[-1]["timestamp"] + TRACK_GAP_SECONDS
         )
         if any(point.get("tracker_id") == OLD_TRAINLOG_IMPORT_TRACKER_ID for point in points_around_trip):
             trips_with_old_trainlog_imports.append(trip)
 
         found = phone_points_during_trip(route, points_around_trip)
         if not found:
+            if sent_long_enough_ago(trip):
+                for message in check_trip_tracks(describe_stored_trip(trip), trip["uid"], route, points_around_trip):
+                    log.warning(message, trip["uid"])
             continue
         if trip_time_looks_wrong(route, found):
             log.warning(
@@ -76,6 +82,14 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     for trip_uid, count in deleted_per_trip.items():
         database.add_phone_points_deleted(trip_uid, count)
     log.phone_points_deleted = len(points_to_delete)
+
+
+def sent_long_enough_ago(trip):
+    """Dawarich builds tracks from points sent hours after they were recorded with a delay
+    (a minute, then a few more for cutting the phone's track), so fresh trips aren't judged yet."""
+    if not trip["sent_at"]:
+        return False
+    return datetime.now(timezone.utc) - datetime.fromisoformat(trip["sent_at"]) >= TIME_FOR_DAWARICH_TO_BUILD_TRACKS
 
 
 def back_up_points(points, settings, run_id):
