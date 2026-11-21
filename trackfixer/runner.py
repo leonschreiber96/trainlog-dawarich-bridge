@@ -1,5 +1,5 @@
-"""One run: get trainlog's trips, sync them to Dawarich, delete duplicate phone points,
-check tracking health, and email about any problems. Only one run at a time."""
+"""One run: get trainlog's trips, sync them and the drawn trips to Dawarich, delete duplicate
+phone points, check tracking health, and email about any problems. Only one run at a time."""
 
 import logging
 import threading
@@ -7,6 +7,7 @@ import time
 
 from . import database
 from .dawarich import DawarichClient
+from .drawn_trips import sync_drawn_trips
 from .health_checks import check_phone_tracker_ids, check_shortcut_heartbeat
 from .notifications import send_problem_email
 from .phone_point_cleanup import remove_phone_points_during_trips
@@ -20,6 +21,7 @@ logger = logging.getLogger("trackfixer")
 NIGHTLY = "nightly"
 MANUAL = "manual"
 UPLOAD = "upload"
+DRAWN_TRIP = "drawn trip"  # a drawn trip was saved or deleted: no trainlog download, no health checks
 
 _one_run_at_a_time = threading.Lock()
 
@@ -47,11 +49,13 @@ def run(settings, trigger, uploaded_csv=None, upload_is_complete_export=False):
         log = RunLog(run_id)
         dawarich = DawarichClient(settings.dawarich_url, settings.dawarich_api_key)
         try:
-            csv_text, is_complete_export = get_trainlog_csv(settings, uploaded_csv, upload_is_complete_export, log)
-            if csv_text is not None:
-                sync_trips_from_csv(csv_text, is_complete_export, dawarich, log)
+            if trigger != DRAWN_TRIP:
+                csv_text, is_complete_export = get_trainlog_csv(settings, uploaded_csv, upload_is_complete_export, log)
+                if csv_text is not None:
+                    sync_trips_from_csv(csv_text, is_complete_export, dawarich, log)
+            sync_drawn_trips(dawarich, log)
             remove_phone_points_during_trips(dawarich, settings, log)
-            if trigger != UPLOAD:
+            if trigger in (NIGHTLY, MANUAL):
                 run_health_checks(dawarich, settings, log)
         except Exception as error:
             logger.exception("Run %s stopped", run_id)

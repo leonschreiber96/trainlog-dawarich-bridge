@@ -5,6 +5,8 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+from .phone_points import DRAWN_TRIP_UID_PREFIX, is_drawn_trip
+
 # What happened to a trainlog trip:
 IN_DAWARICH = "in_dawarich"  # its points are in Dawarich
 PLANNED = "planned"  # still in the future, will be sent once it's over
@@ -37,6 +39,15 @@ CREATE TABLE IF NOT EXISTS trips (
     resent_for_track_at TEXT,         -- when its points were sent again because Dawarich made no proper track
     phone_points_deleted INTEGER NOT NULL DEFAULT 0,
     first_seen_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Trips drawn on a map in the web UI (see drawn_trips.py). Their uid in the trips table is "drawn-<id>".
+CREATE TABLE IF NOT EXISTS drawn_trips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- AUTOINCREMENT: a deleted trip's uid is never used again
+    csv_row TEXT NOT NULL,            -- the trip as a row of trainlog's CSV export (without uid), as JSON
+    drawing TEXT NOT NULL,            -- the route as drawn on the map, as JSON, to edit it again
+    created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -181,9 +192,16 @@ def add_phone_points_deleted(uid, count):
         )
 
 
-def trips_not_removed():
+def trainlog_trips_not_removed():
     with connect() as connection:
-        return connection.execute("SELECT * FROM trips WHERE status != ?", (REMOVED,)).fetchall()
+        trips = connection.execute("SELECT * FROM trips WHERE status != ?", (REMOVED,)).fetchall()
+    return [trip for trip in trips if not is_drawn_trip(trip["uid"])]
+
+
+def drawn_trips_not_removed():
+    with connect() as connection:
+        trips = connection.execute("SELECT * FROM trips WHERE status != ?", (REMOVED,)).fetchall()
+    return [trip for trip in trips if is_drawn_trip(trip["uid"])]
 
 
 def trips_to_check_for_phone_points(since):
@@ -210,6 +228,62 @@ def trip_counts_by_status():
     with connect() as connection:
         rows = connection.execute("SELECT status, COUNT(*) AS count FROM trips GROUP BY status").fetchall()
     return {row["status"]: row["count"] for row in rows}
+
+
+# --- Drawn trips ------------------------------------------------------------------
+
+
+def drawn_trip_uid(drawn_trip_id):
+    return f"{DRAWN_TRIP_UID_PREFIX}{drawn_trip_id}"
+
+
+def save_drawn_trip(drawn_trip_id, row, drawing):
+    """Insert (drawn_trip_id None) or update a drawn trip. Returns its id."""
+    now = now_iso()
+    with connect() as connection:
+        if drawn_trip_id is None:
+            cursor = connection.execute(
+                "INSERT INTO drawn_trips (csv_row, drawing, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (json.dumps(row), json.dumps(drawing), now, now),
+            )
+            return cursor.lastrowid
+        connection.execute(
+            "UPDATE drawn_trips SET csv_row = ?, drawing = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(row), json.dumps(drawing), now, drawn_trip_id),
+        )
+        return drawn_trip_id
+
+
+def get_drawn_trip(drawn_trip_id):
+    with connect() as connection:
+        return connection.execute("SELECT * FROM drawn_trips WHERE id = ?", (drawn_trip_id,)).fetchone()
+
+
+def delete_drawn_trip(drawn_trip_id):
+    """Its points are removed from Dawarich by the next run."""
+    with connect() as connection:
+        connection.execute("DELETE FROM drawn_trips WHERE id = ?", (drawn_trip_id,))
+
+
+def drawn_trip_rows():
+    """All drawn trips as rows of trainlog's CSV export, with their uid."""
+    with connect() as connection:
+        drawn_trips = connection.execute("SELECT id, csv_row FROM drawn_trips ORDER BY id").fetchall()
+    return [dict(json.loads(drawn_trip["csv_row"]), uid=drawn_trip_uid(drawn_trip["id"])) for drawn_trip in drawn_trips]
+
+
+def all_drawn_trips():
+    """Drawn trips with what happened to them so far: the trips table's columns
+    (status, sent_fingerprint...) are None until a run has synced them."""
+    with connect() as connection:
+        return connection.execute(
+            """
+            SELECT drawn_trips.id, drawn_trips.csv_row, trips.status, trips.status_detail, trips.sent_fingerprint,
+                   trips.sent_point_count, trips.phone_points_deleted, trips.sent_at
+            FROM drawn_trips LEFT JOIN trips ON trips.uid = ? || drawn_trips.id
+            """,
+            (DRAWN_TRIP_UID_PREFIX,),
+        ).fetchall()
 
 
 # --- Runs -------------------------------------------------------------------------

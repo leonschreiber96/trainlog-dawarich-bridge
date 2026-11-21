@@ -46,13 +46,20 @@
     .skipped, .removed, .running-outcome { color: var(--muted); }
     button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--background); color: var(--text); cursor: pointer; }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    a.button { display: inline-block; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--background); color: var(--text); }
+    a.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    a.button:hover { text-decoration: none; }
+    input, select { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+    input[type="checkbox"], input[type="file"] { padding: 0; border: none; background: none; }
     form { margin: 0; }
     .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
     dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
     dt { color: var(--muted); }
     dd { margin: 0; overflow-wrap: anywhere; }
     .filters { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+    .flash.error-message { border-left-color: var(--error); }
   </style>
+  {% block head %}{% endblock %}
 </head>
 <body>
 <main>
@@ -60,6 +67,7 @@
     <strong>Track fixer</strong>
     <a href="{{ url_for('overview') }}">Overview</a>
     <a href="{{ url_for('trips') }}">Trips</a>
+    <a href="{{ url_for('drawn_trips') }}">Drawn trips</a>
   </nav>
   {% for message in get_flashed_messages() %}<div class="flash">{{ message }}</div>{% endfor %}
   {% if run_is_going %}<div class="flash running">A run is going. This page refreshes every 5 seconds.</div>{% endif %}

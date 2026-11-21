@@ -5,6 +5,7 @@ from pathlib import Path
 
 from trackfixer import database
 from trackfixer.config import Settings
+from trackfixer.converter import encode_path  # noqa: F401 (tests import it from here)
 
 # --- A made-up example day ----------------------------------------------------------
 #
@@ -91,24 +92,6 @@ def meters_to_latitude_longitude(position):
     latitude = ORIGIN_LATITUDE + north / 111_320
     longitude = ORIGIN_LONGITUDE + east / (111_320 * math.cos(math.radians(ORIGIN_LATITUDE)))
     return round(latitude, 7), round(longitude, 7)
-
-
-def encode_path(vertices):
-    """Google polyline encoding of [longitude, latitude] vertices, like trainlog's CSV export."""
-    def encode_number(value):
-        value = ~(value << 1) if value < 0 else value << 1
-        chunks = ""
-        while value >= 0x20:
-            chunks += chr((0x20 | (value & 0x1F)) + 63)
-            value >>= 5
-        return chunks + chr(value + 63)
-
-    encoded, previous_latitude, previous_longitude = "", 0, 0
-    for longitude, latitude in vertices:
-        latitude, longitude = round(latitude * 1e5), round(longitude * 1e5)
-        encoded += encode_number(latitude - previous_latitude) + encode_number(longitude - previous_longitude)
-        previous_latitude, previous_longitude = latitude, longitude
-    return encoded
 
 
 def example_bus_trip_row(uid="1234", **changes):

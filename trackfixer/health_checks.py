@@ -5,7 +5,7 @@ Each check returns a list of warning messages (empty if all is well).
 
 from datetime import datetime
 
-from .phone_points import is_trainlog_point, tracker_id_for_trip
+from .phone_points import is_trip_point, tracker_id_for_trip
 
 # Dawarich's default "minutes between routes": phone points closer in time than this can end up in one track.
 TRACK_GAP_SECONDS = 30 * 60
@@ -22,7 +22,7 @@ def check_phone_tracker_ids(points):
 
     Only the latest point of each is compared, so a fixed tid counts right away,
     even while older points of the day still have the old one."""
-    phone_points = sorted((point for point in points if not is_trainlog_point(point)),
+    phone_points = sorted((point for point in points if not is_trip_point(point)),
                           key=lambda point: point["timestamp"])
     shortcut_points = [point for point in phone_points if looks_like_shortcut_point(point)]
     app_points = [point for point in phone_points if not looks_like_shortcut_point(point)]
@@ -90,7 +90,7 @@ def trip_track_problem(trip_name, trip_uid, route, points_around_trip):
 
     trip_start, trip_end = route[0]["timestamp"], route[-1]["timestamp"]
     phone_points = sorted((point for point in points_around_trip
-                           if not is_trainlog_point(point) and not point.get("anomaly")),
+                           if not is_trip_point(point) and not point.get("anomaly")),
                           key=lambda point: point["timestamp"])
     if any(trip_start <= point["timestamp"] <= trip_end for point in phone_points):
         return None  # phone points during the trip are deleted first; judged in a later run

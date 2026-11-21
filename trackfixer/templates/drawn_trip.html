@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block title %}{% if drawn_trip_id %}Edit drawn trip{% else %}Draw a trip{% endif %} · Track fixer{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  .trip-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .trip-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+  .trip-fields input, .trip-fields select { font-size: 15px; }
+  #map { height: 62vh; min-height: 340px; margin-top: 16px; border-radius: 10px; border: 1px solid var(--border); }
+  #map.busy, #map.busy .leaflet-interactive { cursor: progress; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; margin-top: 8px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+                         margin-right: 6px; background: var(--dot); vertical-align: -1px; }
+  .map-status { min-height: 1.5em; margin: 6px 0 0; }
+  .point-popup button { margin: 6px 6px 0 0; padding: 3px 10px; }
+</style>
+{% endblock %}
+{% block content %}
+{% if error %}<div class="flash error-message">{{ error }}</div>{% endif %}
+
+<form method="post" id="trip-form"
+      action="{{ url_for('save_drawn_trip', drawn_trip_id=drawn_trip_id) if drawn_trip_id else url_for('create_drawn_trip') }}">
+  <div class="card">
+    <div class="trip-fields">
+      <label>Type
+        <select name="type" id="type">
+          {% for key, trip_type in types.items() %}
+          <option value="{{ key }}" {% if values.type == key %}selected{% endif %}>{{ trip_type.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>From <input name="origin" value="{{ values.origin or '' }}" required maxlength="200"></label>
+      <label>To <input name="destination" value="{{ values.destination or '' }}" required maxlength="200"></label>
+      <label>Day <input type="date" id="day" required></label>
+      <label>Start <input type="time" id="start-time" step="1" required></label>
+      <label><span>End <span id="next-day"></span></span><input type="time" id="end-time" step="1" required></label>
+    </div>
+    <p class="muted" style="margin: 14px 0 0">
+      Click on the map where the trip started, then along the way to where it ended. With "Follow roads and
+      paths", each click is joined to the previous one along roads and paths, found by routing.openstreetmap.de
+      (the routing service of openstreetmap.org, which gets the two places); otherwise by a straight line.
+      The dots are Dawarich's points of the day: click one to use its time as start or end.
+    </p>
+    <div class="form-row">
+      <label><input type="checkbox" id="follow-roads" checked> Follow roads and paths</label>
+      <button type="button" id="undo">Undo</button>
+      <button type="button" id="clear">Clear route</button>
+      <span id="route-summary" class="muted"></span>
+    </div>
+  </div>
+
+  <div id="map"></div>
+  <div class="legend muted">
+    <span style="--dot: #7048e8">your route</span>
+    <span style="--dot: #2f6fdb">phone points</span>
+    <span style="--dot: #e8590c" id="deleted-legend">phone points during the trip: deleted after saving (with a backup)</span>
+    <span style="--dot: #9a9a94">other trips</span>
+  </div>
+  <p id="map-status" class="map-status muted"></p>
+
+  <input type="hidden" name="start_timestamp">
+  <input type="hidden" name="end_timestamp">
+  <input type="hidden" name="start_datetime">
+  <input type="hidden" name="drawing">
+  <div class="form-row">
+    <button class="primary">Save</button>
+    <a class="button" href="{{ url_for('drawn_trips') }}">Cancel</a>
+  </div>
+</form>
+
+{% if drawn_trip_id %}
+<form method="post" action="{{ url_for('delete_drawn_trip', drawn_trip_id=drawn_trip_id) }}" class="form-row"
+      onsubmit="return confirm('Delete this trip? Its points are removed from Dawarich. Phone points deleted because of it stay deleted (they are in the backups).')">
+  <button>Delete trip</button>
+</form>
+{% endif %}
+
+<script>
+(() => {
+  const values = {{ values | tojson }};
+  const tripTypes = {{ types | tojson }};
+  const ownTrackerId = {{ own_tracker_id | tojson }};  // this trip's own points in Dawarich aren't shown
+  const pointsUrl = {{ url_for('dawarich_points_for_map') | tojson }};
+  const ROUTING_URL = 'https://routing.openstreetmap.de';
+  const COLORS = {route: '#7048e8', phone: '#2f6fdb', duringTrip: '#e8590c', otherTrips: '#9a9a94'};
+
+  const form = document.getElementById('trip-form');
+  const typeInput = document.getElementById('type');
+  const dayInput = document.getElementById('day');
+  const startInput = document.getElementById('start-time');
+  const endInput = document.getElementById('end-time');
+  const followRoads = document.getElementById('follow-roads');
+  const mapElement = document.getElementById('map');
+  const setStatus = (text) => { document.getElementById('map-status').textContent = text; };
+
+  // --- Times, in the browser's time zone ---------------------------------------------
+
+  const pad = (number) => String(number).padStart(2, '0');
+  const dayText = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const timeText = (date) => `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+  function dateAt(day, time) {
+    const [year, month, date] = day.split('-').map(Number);
+    const [hours, minutes, seconds = 0] = time.split(':').map(Number);
+    return new Date(year, month - 1, date, hours, minutes, seconds);
+  }
+
+  function tripTimes() {
+    if (!dayInput.value) return {start: null, end: null};
+    const start = startInput.value ? dateAt(dayInput.value, startInput.value) : null;
+    const end = endInput.value ? dateAt(dayInput.value, endInput.value) : null;
+    if (start && end && end < start) end.setDate(end.getDate() + 1);  // the trip ran past midnight
+    return {start, end};
+  }
+
+  if (values.start_timestamp) {
+    const start = new Date(values.start_timestamp * 1000);
+    dayInput.value = dayText(start);
+    startInput.value = timeText(start);
+  } else {
+    dayInput.value = dayText(new Date());
+  }
+  if (values.end_timestamp) endInput.value = timeText(new Date(values.end_timestamp * 1000));
+
+  // --- The map -------------------------------------------------------------------------
+
+  const map = L.map(mapElement, {preferCanvas: true});
+  let legs = values.legs || [];  // the first leg is the start; each further leg is the way to the next click
+  let savedView = null;
+  try { savedView = JSON.parse(localStorage.getItem('drawn-trip-map-view')); } catch (error) { /* no storage */ }
+  if (legs.length) {
+    map.fitBounds(L.latLngBounds(legs.flat().map(([longitude, latitude]) => [latitude, longitude])),
+                  {padding: [30, 30], maxZoom: 17});
+  } else if (savedView) {
+    map.setView(savedView.center, savedView.zoom);
+  } else {
+    map.setView([51, 10], 6);
+  }
+  map.on('moveend', () => {
+    try {
+      localStorage.setItem('drawn-trip-map-view', JSON.stringify({center: map.getCenter(), zoom: map.getZoom()}));
+    } catch (error) { /* no storage */ }
+  });
+
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  // Dawarich's points below the route; the route doesn't catch clicks, so they reach the points and the map.
+  map.createPane('dawarich').style.zIndex = 410;
+  map.createPane('route').style.zIndex = 420;
+  map.getPane('route').style.pointerEvents = 'none';
+  const dawarichRenderer = L.canvas({pane: 'dawarich'});
+  const routeRenderer = L.canvas({pane: 'route'});
+  const dawarichLayer = L.layerGroup().addTo(map);
+  const routeLine = L.polyline([], {color: COLORS.route, weight: 5, opacity: 0.85, renderer: routeRenderer,
+                                    interactive: false}).addTo(map);
+  const waypointLayer = L.layerGroup().addTo(map);
+
+  // --- Dawarich's points of the day ----------------------------------------------------
+
+  let dawarichPoints = [];
+  let loadedRange = '';
+
+  async function loadDawarichPoints() {
+    if (!dayInput.value) return;
+    const dayStart = dateAt(dayInput.value, '00:00');
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const {end} = tripTimes();
+    const rangeEnd = end && end.getTime() + 3600e3 > dayEnd.getTime() ? new Date(end.getTime() + 3600e3) : dayEnd;
+    const range = `start=${dayStart.getTime() / 1000}&end=${Math.round(rangeEnd.getTime() / 1000)}`;
+    if (range === loadedRange) return;
+    loadedRange = range;
+    setStatus("Loading Dawarich's points…");
+    try {
+      const response = await fetch(`${pointsUrl}?${range}`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      if (range !== loadedRange) return;  // the day changed meanwhile
+      dawarichPoints = body.filter((point) => point.tracker_id !== ownTrackerId);
+      setStatus(dawarichPoints.length ? '' : 'Dawarich has no points on this day.');
+      showDawarichPoints();
+      const phonePoints = dawarichPoints.filter((point) => !point.is_trip_point);
+      if (!legs.length && phonePoints.length) {
+        map.fitBounds(L.latLngBounds(phonePoints.map((point) => [point.latitude, point.longitude])),
+                      {padding: [30, 30], maxZoom: 16});
+      }
+    } catch (error) {
+      if (range !== loadedRange) return;
+      loadedRange = '';
+      setStatus(`Couldn't load Dawarich's points: ${error.message}`);
+    }
+  }
+
+  function describePoint(point) {
+    const time = new Date(point.timestamp * 1000);
+    let text = dayText(time) === dayInput.value ? timeText(time) : `${dayText(time)} ${timeText(time)}`;
+    if (point.accuracy) text += ` · ±${Math.round(point.accuracy)} m`;
+    if (point.anomaly) text += ' · flagged as GPS noise';
+    return text;
+  }
+
+  function showDawarichPoints() {
+    dawarichLayer.clearLayers();
+    const {start, end} = tripTimes();
+    const duringTrip = (point) => start && end && start / 1000 <= point.timestamp && point.timestamp <= end / 1000;
+
+    const otherTrips = new Map();
+    const phonePoints = [];
+    for (const point of dawarichPoints) {
+      if (!point.is_trip_point) {
+        phonePoints.push(point);
+        continue;
+      }
+      if (!otherTrips.has(point.tracker_id)) otherTrips.set(point.tracker_id, []);
+      otherTrips.get(point.tracker_id).push([point.latitude, point.longitude]);
+    }
+    for (const latLngs of otherTrips.values()) {
+      L.polyline(latLngs, {color: COLORS.otherTrips, weight: 3, opacity: 0.8, renderer: dawarichRenderer,
+                           interactive: false}).addTo(dawarichLayer);
+    }
+    L.polyline(phonePoints.filter((point) => !point.anomaly).map((point) => [point.latitude, point.longitude]),
+               {color: COLORS.phone, weight: 1.5, opacity: 0.5, dashArray: '4 4', renderer: dawarichRenderer,
+                interactive: false}).addTo(dawarichLayer);
+
+    let countDuringTrip = 0;
+    for (const point of phonePoints) {
+      const color = duringTrip(point) ? COLORS.duringTrip : COLORS.phone;
+      if (duringTrip(point)) countDuringTrip += 1;
+      L.circleMarker([point.latitude, point.longitude], {
+        radius: 5, color, weight: 1.5, fillColor: color, fillOpacity: point.anomaly ? 0.1 : 0.6,
+        renderer: dawarichRenderer, bubblingMouseEvents: false,
+      }).bindTooltip(describePoint(point)).on('click', () => openPointPopup(point)).addTo(dawarichLayer);
+    }
+    document.getElementById('deleted-legend').textContent =
+      `${countDuringTrip} phone points during the trip: deleted after saving (with a backup)`;
+  }
+
+  function openPointPopup(point) {
+    const time = new Date(point.timestamp * 1000);
+    const content = document.createElement('div');
+    content.className = 'point-popup';
+    content.append(describePoint(point), document.createElement('br'));
+    const addButton = (label, action) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => { map.closePopup(); action(); });
+      content.append(button);
+    };
+    addButton('Start time', () => {
+      dayInput.value = dayText(time);
+      startInput.value = timeText(time);
+      timesChanged();
+    });
+    addButton('End time', () => {
+      if (!dayInput.value) dayInput.value = dayText(time);
+      endInput.value = timeText(time);
+      timesChanged();
+    });
+    addButton('Add to route', () => addRoutePoint(point.longitude, point.latitude));
+    L.popup().setLatLng([point.latitude, point.longitude]).setContent(content).openOn(map);
+  }
+
+  function timesChanged() {
+    const {start, end} = tripTimes();
+    document.getElementById('next-day').textContent = start && end && dayText(end) !== dayText(start) ? '(next day)' : '';
+    showDawarichPoints();
+    loadDawarichPoints();
+    updateSummary();
+  }
+  for (const input of [dayInput, startInput, endInput]) input.addEventListener('change', timesChanged);
+
+  // --- Drawing the route ---------------------------------------------------------------
+
+  let routing = false;
+
+  function drawRoute() {
+    routeLine.setLatLngs(legs.flat().map(([longitude, latitude]) => [latitude, longitude]));
+    waypointLayer.clearLayers();
+    legs.forEach((leg, index) => {
+      const [longitude, latitude] = leg[leg.length - 1];
+      const isStartOrEnd = index === 0 || index === legs.length - 1;
+      L.circleMarker([latitude, longitude], {
+        radius: isStartOrEnd ? 7 : 5, color: COLORS.route, weight: 2, fillColor: '#fff', fillOpacity: 1,
+        renderer: routeRenderer, interactive: false,
+      }).addTo(waypointLayer);
+    });
+    updateSummary();
+  }
+
+  async function addRoutePoint(longitude, latitude) {
+    if (routing) return;
+    const previousLeg = legs[legs.length - 1];
+    const previous = previousLeg && previousLeg[previousLeg.length - 1];
+    if (!previous || !followRoads.checked) {
+      legs.push([[longitude, latitude]]);
+      drawRoute();
+      return;
+    }
+    routing = true;
+    mapElement.classList.add('busy');
+    setStatus('Finding the way…');
+    try {
+      const profile = tripTypes[typeInput.value].routing_profile;
+      const response = await fetch(`${ROUTING_URL}/${profile}/route/v1/driving/`
+                                   + `${previous[0]},${previous[1]};${longitude},${latitude}?overview=full&geometries=geojson`);
+      const body = await response.json();
+      if (body.code !== 'Ok' || !body.routes.length) throw new Error(body.message || body.code);
+      legs.push(body.routes[0].geometry.coordinates);
+      setStatus('');
+    } catch (error) {
+      legs.push([[longitude, latitude]]);
+      setStatus(`Couldn't find a way there (${error.message}), so that part is a straight line. Undo to try again.`);
+    } finally {
+      routing = false;
+      mapElement.classList.remove('busy');
+      drawRoute();
+    }
+  }
+
+  function updateSummary() {
+    const vertices = legs.flat();
+    let meters = 0;
+    for (let index = 1; index < vertices.length; index++) {
+      meters += map.distance([vertices[index - 1][1], vertices[index - 1][0]], [vertices[index][1], vertices[index][0]]);
+    }
+    const {start, end} = tripTimes();
+    const parts = [];
+    if (vertices.length > 1) parts.push(`${(meters / 1000).toFixed(1)} km`);
+    if (start && end && end > start) {
+      const hours = (end - start) / 3600e3;
+      parts.push(`${Math.round(hours * 60)} min`);
+      if (vertices.length > 1) parts.push(`${(meters / 1000 / hours).toFixed(1)} km/h`);
+    }
+    document.getElementById('route-summary').textContent = parts.join(' · ');
+  }
+
+  map.on('click', (event) => {
+    const position = event.latlng.wrap();
+    addRoutePoint(Number(position.lng.toFixed(6)), Number(position.lat.toFixed(6)));
+  });
+  document.getElementById('undo').addEventListener('click', () => {
+    if (routing) return;
+    legs.pop();
+    drawRoute();
+  });
+  document.getElementById('clear').addEventListener('click', () => {
+    if (routing || !legs.length || !confirm('Clear the whole route?')) return;
+    legs = [];
+    drawRoute();
+  });
+
+  form.addEventListener('submit', (event) => {
+    if (routing) {
+      event.preventDefault();
+      return;
+    }
+    const {start, end} = tripTimes();
+    form.elements.start_timestamp.value = start ? Math.round(start.getTime() / 1000) : '';
+    form.elements.end_timestamp.value = end ? Math.round(end.getTime() / 1000) : '';
+    form.elements.start_datetime.value = start ? `${dayText(start)} ${timeText(start)}` : '';
+    form.elements.drawing.value = JSON.stringify({legs});
+  });
+
+  drawRoute();
+  timesChanged();
+})();
+</script>
+{% endblock %}

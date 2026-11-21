@@ -1,4 +1,5 @@
-"""Finding phone points (Dawarich app, iOS Shortcut) that were recorded during a trainlog trip.
+"""Finding phone points (Dawarich app, iOS Shortcut) that were recorded during a trip
+(from trainlog, or drawn in this app).
 
 trainlog routes follow the real tracks and roads, phone points cut corners. Phone
 points recorded during a trip only create a second, worse track for the same ride,
@@ -11,6 +12,11 @@ Dawarich's API or from converter.convert_trip.
 import math
 
 TRAINLOG_TRACKER_PREFIX = "trainlog-"
+
+# Trips drawn on a map in this app (see drawn_trips.py) have uids like "drawn-3" and tracker ids
+# like "trackfixer-drawn-3". trainlog's uids are numbers, so they never clash.
+DRAWN_TRIP_UID_PREFIX = "drawn-"
+DRAWN_TRIP_TRACKER_PREFIX = "trackfixer-"
 
 # trainlog times are only accurate to the minute, and rides can run late. Phone points
 # up to this long before/after a trip are deleted too, but only if they lie on the route.
@@ -30,12 +36,19 @@ MIN_POINTS_TO_JUDGE_TRIP_TIME = 3
 METERS_PER_DEGREE_LATITUDE = 111_320
 
 
+def is_drawn_trip(trip_uid):
+    return trip_uid.startswith(DRAWN_TRIP_UID_PREFIX)
+
+
 def tracker_id_for_trip(trip_uid):
+    if is_drawn_trip(trip_uid):
+        return f"{DRAWN_TRIP_TRACKER_PREFIX}{trip_uid}"
     return f"{TRAINLOG_TRACKER_PREFIX}{trip_uid}"
 
 
-def is_trainlog_point(point):
-    return (point.get("tracker_id") or "").startswith(TRAINLOG_TRACKER_PREFIX)
+def is_trip_point(point):
+    """A point of a trainlog trip or a drawn trip, i.e. not a phone point."""
+    return (point.get("tracker_id") or "").startswith((TRAINLOG_TRACKER_PREFIX, DRAWN_TRIP_TRACKER_PREFIX))
 
 
 def phone_points_during_trip(route, points_around_trip):
@@ -46,7 +59,7 @@ def phone_points_during_trip(route, points_around_trip):
 
     found = []
     for point in points_around_trip:
-        if is_trainlog_point(point):
+        if is_trip_point(point):
             continue
         inside_trip_time = trip_start <= point["timestamp"] <= trip_end
         inside_buffer_time = trip_start - TIME_BUFFER_SECONDS <= point["timestamp"] <= trip_end + TIME_BUFFER_SECONDS

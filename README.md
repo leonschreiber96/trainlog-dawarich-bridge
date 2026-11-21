@@ -5,13 +5,14 @@ along its real route, with a small web UI and email when something goes wrong.
 
 ## The problem it solves
 
-My location history comes from three sources:
+My location history comes from these sources:
 
 | Source | `tracker_id` in Dawarich | Quality |
 |---|---|---|
 | Dawarich iOS app | the app's device id (see a point's `tracker_id` in Dawarich) | good, but cuts corners on rides |
 | iOS Shortcut (every 15 min, OwnTracks endpoint) | same as the app (set via `tid`) | coarse, helps visit detection |
 | trainlog.me trips (sent by this app) | `trainlog-<trip uid>`, one per trip | exact route of each ride |
+| Drawn trips (drawn on a map in this app) | `trackfixer-drawn-<n>`, one per trip | as exact as drawn |
 
 Dawarich builds tracks **separately per `tracker_id`** (`PARTITION BY tracker_id` in its
 `app/models/track.rb`). Points from different trackers never end up in the same track. So:
@@ -24,9 +25,28 @@ Dawarich builds tracks **separately per `tracker_id`** (`PARTITION BY tracker_id
 - **Back-to-back trainlog trips became one track** when they shared one tracker id.
   Each trip now gets its own tracker id, `trainlog-<trip uid>`.
 
+## Drawn trips
+
+For journeys that aren't in trainlog and that the phone recorded badly (walks, runs, bike and car
+rides): on the "Drawn trips" page, draw the route on a map, with the day and start and end time.
+The map shows Dawarich's points of that day; click one to use its time as start or end. Phone
+points during the trip are shown in orange: those are deleted once it's saved.
+
+With "Follow roads and paths", each click is joined to the previous one along the way found by
+routing.openstreetmap.de (FOSSGIS's routing service that openstreetmap.org uses, profile by trip
+type). Your browser sends it the two places of each click; nothing else. Without it, clicks are
+joined by straight lines. Map tiles come from tile.openstreetmap.org.
+
+A drawn trip is stored as a row in the format of trainlog's CSV export (`drawn_trips.py`), so it
+then goes through the same steps as a trainlog trip below: sent as its own tracker with its mode
+of transport set for sure, phone points during it deleted, its track checked. Saving or deleting
+one starts a short run that does just that (no trainlog download, no health checks). Deleting a
+drawn trip removes its points from Dawarich; the phone points deleted for it stay deleted (they're
+in the backups).
+
 ## What a run does
 
-Every night (and on "Run now" or a CSV upload):
+Every night (and on "Run now", a CSV upload, or saving a drawn trip):
 
 1. **Get trainlog's trips.** Logs in to trainlog and downloads the CSV export (the same as
    the export button). Skipped if no trainlog login is configured; then upload CSVs in the UI.
@@ -36,11 +56,13 @@ Every night (and on "Run now" or a CSV upload):
    removed (only for complete exports, and at most 10 at once). Places (restaurant, POI,
    accommodation), trips without exact times and future trips are not sent.
    No Dawarich imports are used, so nothing is left behind when a trip is replaced.
+   Then the same for drawn trips: new and edited ones are sent, deleted ones removed.
    Each point carries the trip's mode of transport (`MOTION_HINTS_BY_TRIP_TYPE`): walk, cycle
-   and car trips are set for sure; for bus, train, tram, metro, ferry and flights Dawarich only
-   accepts a hint and may still detect something else. Wrong modes can be corrected in
-   Dawarich's UI. Dawarich keeps those corrections when it re-classifies a track, but not on
-   "Recalculate tracks & stats": that deletes and rebuilds all tracks of a year, corrections included.
+   and car trips (and runs, which only drawn trips have) are set for sure; for bus, train, tram,
+   metro, ferry and flights Dawarich only accepts a hint and may still detect something else.
+   Wrong modes can be corrected in Dawarich's UI. Dawarich keeps those corrections when it
+   re-classifies a track, but not on "Recalculate tracks & stats": that deletes and rebuilds all
+   tracks of a year, corrections included.
 3. **Delete phone points during trips** (`phone_point_cleanup.py`). For trips sent or taken in
    the last 30 days: every phone point inside the trip's time, plus those up to 3 minutes
    before/after that lie within 50 m of the route, except those within 150 m of the departure or

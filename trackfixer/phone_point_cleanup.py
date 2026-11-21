@@ -9,7 +9,7 @@ from . import database
 from .converter import convert_trip
 from .health_checks import TRACK_GAP_SECONDS, trip_track_problem
 from .phone_points import phone_points_during_trip, trip_time_looks_wrong
-from .trip_sync import describe_stored_trip, resend_trip
+from .trip_sync import describe_stored_trip, resend_trip, where_trip_is_kept
 
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
@@ -50,7 +50,8 @@ def remove_phone_points_during_trips(dawarich, settings, log):
         if trip_time_looks_wrong(route, found):
             log.warning(
                 f"Most phone points recorded during {describe_stored_trip(trip)} were more than 1 km from its "
-                "route, so its time in trainlog is probably wrong. No phone points were deleted for it.",
+                f"route, so its time {where_trip_is_kept(trip['uid'])} is probably wrong. No phone points were "
+                "deleted for it.",
                 trip["uid"],
             )
             continue

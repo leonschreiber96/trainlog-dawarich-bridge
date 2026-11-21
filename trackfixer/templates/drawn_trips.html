@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Drawn trips · Track fixer{% endblock %}
+{% block content %}
+<div class="card">
+  <p style="margin-top: 0">
+    For journeys that aren't in trainlog, like walks or car rides the phone recorded badly: draw the route on
+    a map, and it's handled like a trainlog trip. Its points go to Dawarich as their own track, and the phone
+    points recorded during it are deleted (with a backup).
+  </p>
+  <a class="button primary" href="{{ url_for('new_drawn_trip') }}">Draw a trip</a>
+</div>
+
+<h2>Drawn trips</h2>
+{% if drawn_trips %}
+<div class="table-wrapper">
+<table>
+  <tr>
+    <th>Start</th><th>Type</th><th>Route</th><th class="number">Length</th><th class="number">Duration</th>
+    <th>Status</th><th class="number">Points</th><th class="number">Phone points deleted</th><th>Notes</th>
+  </tr>
+  {% for trip in drawn_trips %}
+  <tr>
+    <td class="nowrap">{{ trip.start_datetime[:16] }}</td>
+    <td>{{ trip.type }}</td>
+    <td><a href="{{ url_for('edit_drawn_trip', drawn_trip_id=trip.id) }}">{{ trip.origin }} → {{ trip.destination }}</a></td>
+    <td class="number nowrap">{{ "%.1f" | format(trip.kilometers) }} km</td>
+    <td class="number nowrap">{{ trip.minutes }} min</td>
+    <td>
+      {% if trip.status %}<span class="badge {{ trip.status }}">{{ trip_status_labels.get(trip.status, trip.status) }}</span>
+      {% else %}<span class="badge planned">waiting for a run</span>{% endif %}
+    </td>
+    <td class="number">{{ trip.sent_point_count or "" }}</td>
+    <td class="number">{{ trip.phone_points_deleted or "" }}</td>
+    <td class="muted">{{ trip.status_detail }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">No drawn trips yet.</p>
+{% endif %}
+{% endblock %}

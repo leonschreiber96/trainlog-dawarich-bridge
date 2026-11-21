@@ -12,7 +12,7 @@ import time
 
 from . import database
 from .converter import convert_trip, parse_utc_timestamp
-from .phone_points import tracker_id_for_trip
+from .phone_points import is_drawn_trip, tracker_id_for_trip
 
 NOT_A_JOURNEY_TYPES = {"accommodation", "restaurant", "poi"}
 
@@ -34,6 +34,7 @@ MOTION_HINTS_BY_TRIP_TYPE = {
     "car": {"motion": ["driving"], "motion_authoritative": True},
     "cycle": {"motion": ["cycling"], "motion_authoritative": True},
     "walk": {"motion": ["walking"], "motion_authoritative": True},
+    "run": {"motion": ["running"], "motion_authoritative": True},  # only in drawn trips
 }
 
 # Only these columns change a trip's points. Editing e.g. a note in trainlog changes nothing.
@@ -82,7 +83,7 @@ def sync_trip(row, dawarich, log):
         changed_columns = [column for column in FINGERPRINT_COLUMNS
                            if json.loads(stored_trip["csv_row"]).get(column, "") != row.get(column, "")]
         if changed_columns:
-            log.info(f"{describe_csv_row(row)} changed in trainlog ({', '.join(changed_columns)}); "
+            log.info(f"{describe_csv_row(row)} changed {where_trip_is_kept(uid)} ({', '.join(changed_columns)}); "
                      "its points are replaced.", uid)
         else:
             log.trips_resent_after_app_update += 1
@@ -146,7 +147,7 @@ def reason_not_to_send(row):
 
 
 def remove_trips_deleted_in_trainlog(trip_uids_in_export, dawarich, log):
-    deleted_trips = [trip for trip in database.trips_not_removed() if trip["uid"] not in trip_uids_in_export]
+    deleted_trips = [trip for trip in database.trainlog_trips_not_removed() if trip["uid"] not in trip_uids_in_export]
     if not deleted_trips:
         return
     if len(deleted_trips) > MAX_TRIPS_REMOVED_PER_RUN:
@@ -159,11 +160,17 @@ def remove_trips_deleted_in_trainlog(trip_uids_in_export, dawarich, log):
         return
 
     for trip in deleted_trips:
-        if trip["sent_fingerprint"]:
-            remove_trip_points(trip, dawarich)
-        database.set_trip_status(trip["uid"], database.REMOVED, "Deleted in trainlog.")
-        log.trips_removed += 1
-        log.info(f"{describe_stored_trip(trip)} was deleted in trainlog; its points were removed.", trip["uid"])
+        remove_deleted_trip(trip, dawarich, log)
+
+
+def remove_deleted_trip(trip, dawarich, log):
+    """Remove a trip that was deleted in trainlog (or on the Drawn trips page) from Dawarich."""
+    if trip["sent_fingerprint"]:
+        remove_trip_points(trip, dawarich)
+    where = where_trip_is_kept(trip["uid"])
+    database.set_trip_status(trip["uid"], database.REMOVED, f"Deleted {where}.")
+    log.trips_removed += 1
+    log.info(f"{describe_stored_trip(trip)} was deleted {where}; its points were removed.", trip["uid"])
 
 
 def remove_trip_points(trip, dawarich):
@@ -178,6 +185,10 @@ def trip_fingerprint(row):
     relevant = {column: row.get(column, "") for column in FINGERPRINT_COLUMNS}
     relevant["converter_version"] = CONVERTER_VERSION
     return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def where_trip_is_kept(trip_uid):
+    return "on the Drawn trips page" if is_drawn_trip(trip_uid) else "in trainlog"
 
 
 def describe_csv_row(row):

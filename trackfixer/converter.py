@@ -154,6 +154,27 @@ def decode_path(encoded_path):
     return vertices
 
 
+def encode_path(vertices):
+    """Encode [longitude, latitude] vertices as a Google encoded polyline (what decode_path reads)."""
+    def encode_number(number):
+        number = ~(number << 1) if number < 0 else number << 1
+        characters = []
+        while number >= 32:
+            characters.append(chr((32 | (number & 31)) + 63))
+            number >>= 5
+        characters.append(chr(number + 63))
+        return "".join(characters)
+
+    encoded = []
+    previous_latitude = previous_longitude = 0
+    for longitude, latitude in vertices:
+        latitude = round(latitude * 10**ENCODED_PATH_PRECISION)
+        longitude = round(longitude * 10**ENCODED_PATH_PRECISION)
+        encoded.append(encode_number(latitude - previous_latitude) + encode_number(longitude - previous_longitude))
+        previous_latitude, previous_longitude = latitude, longitude
+    return "".join(encoded)
+
+
 def parse_waypoints(value):
     """trainlog's waypoints column: a JSON list, sometimes JSON-encoded several times."""
     for _ in range(6):
