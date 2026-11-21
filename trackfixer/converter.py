@@ -15,8 +15,8 @@ How the timestamps are made:
   the fastest section is made as slow as they allow.
 * Between two anchors, time is spread over the route by distance.
 * Finally the route is simplified: a vertex is only kept if it is needed to stay
-  within 25 m of the real route, if it is an anchor, or as a checkpoint roughly
-  every 120 seconds. No two points share a second.
+  within 25 m of the real route (or another tolerance), if it is an anchor, or as a
+  checkpoint roughly every 120 seconds. No two points share a second.
 """
 
 import bisect
@@ -33,7 +33,7 @@ MAX_STOP_DISTANCE_FROM_ROUTE_METERS = 500
 EARTH_RADIUS_METERS = 6_371_000
 
 
-def convert_trip(row):
+def convert_trip(row, simplify_tolerance_meters=SIMPLIFY_TOLERANCE_METERS):
     """Returns (route points, warnings). Raises ValueError if the trip can't be converted.
 
     Each route point is a dict with "timestamp", "latitude" and "longitude".
@@ -79,7 +79,7 @@ def convert_trip(row):
 
     anchor_indices = [index for index, _ in anchors]
     times = interpolate_times(route, distance_along_route, anchor_indices, anchor_times)
-    kept_indices = simplify_route(route, times, anchor_indices)
+    kept_indices = simplify_route(route, times, anchor_indices, simplify_tolerance_meters)
     kept_indices = drop_points_sharing_a_second(kept_indices, times, anchor_indices)
 
     route_points = [
@@ -343,7 +343,7 @@ def distance_to_segment_meters(position, segment_start, segment_end):
     return math.hypot(point_x - progress * end_x, point_y - progress * end_y)
 
 
-def simplify_route(route, times, anchor_indices):
+def simplify_route(route, times, anchor_indices, tolerance_meters=SIMPLIFY_TOLERANCE_METERS):
     """Indices of the route vertices to keep (Douglas-Peucker between fixed vertices)."""
     must_keep = {0, len(route) - 1, *anchor_indices}
 
@@ -365,7 +365,7 @@ def simplify_route(route, times, anchor_indices):
              for index in range(left + 1, right)),
             key=lambda pair: pair[1],
         )
-        if farthest_distance > SIMPLIFY_TOLERANCE_METERS:
+        if farthest_distance > tolerance_meters:
             keep.add(farthest_index)
             sections_to_check.extend(((left, farthest_index), (farthest_index, right)))
     return sorted(keep)

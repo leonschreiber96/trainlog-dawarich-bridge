@@ -39,7 +39,8 @@ joined by straight lines. Map tiles come from tile.openstreetmap.org.
 
 A drawn trip is stored as a row in the format of trainlog's CSV export (`drawn_trips.py`), so it
 then goes through the same steps as a trainlog trip below: sent as its own tracker with its mode
-of transport set for sure, phone points during it deleted, its track checked. Saving or deleting
+of transport set for sure, phone points during it deleted, its track checked. Its points follow the
+drawn route within 5 m (trainlog trips: 25 m, which would cut corners in a street). Saving or deleting
 one starts a short run that does just that (no trainlog download, no health checks). Deleting a
 drawn trip removes its points from Dawarich; the phone points deleted for it stay deleted (they're
 in the backups).

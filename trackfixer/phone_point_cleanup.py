@@ -6,10 +6,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from . import database
-from .converter import convert_trip
 from .health_checks import TRACK_GAP_SECONDS, trip_track_problem
 from .phone_points import phone_points_during_trip, trip_time_looks_wrong
-from .trip_sync import describe_stored_trip, resend_trip, where_trip_is_kept
+from .trip_sync import describe_stored_trip, resend_trip, route_of_trip, where_trip_is_kept
 
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
@@ -36,7 +35,7 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     trips_with_old_trainlog_imports = []
 
     for trip in trips:
-        route, _ = convert_trip(json.loads(trip["csv_row"]))
+        route, _ = route_of_trip(json.loads(trip["csv_row"]))
         points_around_trip = dawarich.get_points(
             route[0]["timestamp"] - TRACK_GAP_SECONDS, route[-1]["timestamp"] + TRACK_GAP_SECONDS
         )

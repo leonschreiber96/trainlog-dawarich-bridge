@@ -11,7 +11,7 @@ import json
 import time
 
 from . import database
-from .converter import convert_trip, parse_utc_timestamp
+from .converter import SIMPLIFY_TOLERANCE_METERS, convert_trip, parse_utc_timestamp
 from .phone_points import is_drawn_trip, tracker_id_for_trip
 
 NOT_A_JOURNEY_TYPES = {"accommodation", "restaurant", "poi"}
@@ -41,6 +41,10 @@ MOTION_HINTS_BY_TRIP_TYPE = {
 FINGERPRINT_COLUMNS = (
     "path", "utc_start_datetime", "utc_end_datetime", "departure_delay", "arrival_delay", "waypoints", "type",
 )
+
+# A drawn trip follows the route as drawn more closely than a trainlog trip (25 m is a lot on a street of
+# houses, it cuts corners), at the cost of a few more points.
+DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS = 5
 
 # Increase this after changing converter.py, so all trips get converted and sent again.
 CONVERTER_VERSION = 2
@@ -94,7 +98,7 @@ def sync_trip(row, dawarich, log):
         return
 
     try:
-        route, converter_warnings = convert_trip(row)
+        route, converter_warnings = route_of_trip(row)
     except ValueError as error:
         database.save_trip(row, fingerprint, database.FAILED, str(error))
         log.warning(f"Couldn't convert {describe_csv_row(row)}: {error}", uid)
@@ -181,9 +185,21 @@ def remove_trip_points(trip, dawarich):
     database.record_trip_points_removed(trip["uid"])
 
 
+def route_of_trip(row):
+    """convert_trip with the right simplification for the trip. Returns (route points, warnings)."""
+    return convert_trip(row, simplify_tolerance_for(row["uid"]))
+
+
+def simplify_tolerance_for(trip_uid):
+    return DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS if is_drawn_trip(trip_uid) else SIMPLIFY_TOLERANCE_METERS
+
+
 def trip_fingerprint(row):
     relevant = {column: row.get(column, "") for column in FINGERPRINT_COLUMNS}
     relevant["converter_version"] = CONVERTER_VERSION
+    if is_drawn_trip(row["uid"]):
+        # Only for drawn trips, so changing it sends them again without touching trainlog trips.
+        relevant["simplify_tolerance_meters"] = DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS
     return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()[:16]
 
 

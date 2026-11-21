@@ -1,4 +1,5 @@
 import json
+import math
 import unittest
 import unittest.mock
 from datetime import datetime
@@ -7,9 +8,9 @@ from trackfixer import database, runner
 from trackfixer.converter import convert_trip, decode_path, distance_meters
 from trackfixer.drawn_trips import MAX_VERTEX_SPACING_METERS, sync_drawn_trips, trip_from_form
 from trackfixer.phone_point_cleanup import remove_phone_points_during_trips
-from trackfixer.phone_points import is_trip_point
+from trackfixer.phone_points import distance_to_route_meters, is_trip_point
 from trackfixer.run_log import RunLog
-from trackfixer.trip_sync import sync_trips
+from trackfixer.trip_sync import route_of_trip, sync_trips
 from trackfixer.web import create_app
 
 from .helpers import (BERLIN, HOME, FakeDawarich, example_bus_trip_row, example_day_points,
@@ -70,6 +71,19 @@ class DrawnTripFormTest(unittest.TestCase):
         self.assertEqual(row["utc_start_datetime"], "2026-11-10 11:05:00")
         self.assertEqual(row["start_datetime"], "2026-11-10 12:05:00")
 
+    def test_follows_the_drawn_route_within_5_meters(self):
+        # A quarter circle of 200 m radius, as routing would draw a curved street.
+        curve = [longitude_latitude((200 * math.sin(math.radians(angle)), 200 * math.cos(math.radians(angle))))
+                 for angle in range(0, 91, 3)]
+        # Under 2 minutes, so no points are kept as checkpoints: only the tolerance decides.
+        row, _ = trip_from_form(walk_form(drawing=json.dumps({"legs": [[curve[0]], curve[1:]]}),
+                                          end_timestamp=str(berlin_timestamp(12, 6, 50))))
+        route, _ = route_of_trip(dict(row, uid="drawn-1"))
+
+        for longitude, latitude in curve:
+            vertex = {"longitude": longitude, "latitude": latitude}
+            self.assertLessEqual(distance_to_route_meters(vertex, route), 5.5)
+
     def test_long_straight_lines_get_points_in_between(self):
         start, three_km_south = longitude_latitude((0, 0)), longitude_latitude((0, -3000))
         row, _ = trip_from_form(walk_form(drawing=json.dumps({"legs": [[start], [three_km_south]]})))
@@ -114,6 +128,16 @@ class DrawnTripSyncTest(unittest.TestCase):
 
         sync_drawn_trips(self.dawarich, new_run_log())
         self.assertEqual(database.get_trip("drawn-1")["sent_point_count"], len(drawn_points(self.dawarich)))
+
+    def test_trips_drawn_before_a_change_of_the_tolerance_are_sent_again(self):
+        save_walk()
+        with unittest.mock.patch("trackfixer.trip_sync.DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS", 25):
+            sync_drawn_trips(self.dawarich, new_run_log())
+        log = new_run_log()
+        sync_drawn_trips(self.dawarich, log)
+
+        self.assertEqual(log.trips_sent, 1)
+        self.assertEqual(log.trips_resent_after_app_update, 1)
 
     def test_a_complete_trainlog_export_leaves_drawn_trips_alone(self):
         save_walk()
