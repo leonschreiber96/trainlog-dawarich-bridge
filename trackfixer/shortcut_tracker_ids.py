@@ -38,7 +38,8 @@ def fix_shortcut_tracker_ids(dawarich, settings, app_tracker_id, since, apply):
         print(f"Dry run: {total} points would get the tracker id {app_tracker_id}. Add --apply to do it.")
     elif total:
         print(f"Done: {total} points now have the tracker id {app_tracker_id}. In Dawarich, press "
-              "'Recalculate tracks & stats' so the tracks of those days are rebuilt with them.")
+              "'Recalculate tracks & stats' so the tracks of those days are rebuilt with them. That deletes "
+              "the manual transport mode corrections of the years it rebuilds.")
     else:
         print("Nothing to fix.")
 

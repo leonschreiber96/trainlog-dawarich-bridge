@@ -10,8 +10,6 @@ from .phone_points import is_trainlog_point, tracker_id_for_trip
 # Dawarich's default "minutes between routes": phone points closer in time than this can end up in one track.
 TRACK_GAP_SECONDS = 30 * 60
 
-RECALCULATE_HINT = 'Use "Recalculate tracks & stats" in Dawarich to rebuild them.'
-
 
 def looks_like_shortcut_point(point):
     """The iOS Shortcut sends battery and Wi-Fi but no accuracy; the Dawarich app sends accuracy."""
@@ -63,8 +61,9 @@ def check_shortcut_heartbeat(points, start_timestamp, end_timestamp, max_silence
     ]
 
 
-def check_trip_tracks(trip_name, trip_uid, route, points_around_trip):
+def trip_track_problem(trip_name, trip_uid, route, points_around_trip):
     """Did Dawarich make a track from the trip, and cut the phone's track where the trip is?
+    None if so, otherwise (what's wrong, whether sending the trip's points again can fix it).
 
     If the trip has no track, nothing cuts the phone's track either: Dawarich only cuts a
     track where another tracker's track fills its gap. The phone's track then runs in a
@@ -73,35 +72,35 @@ def check_trip_tracks(trip_name, trip_uid, route, points_around_trip):
     points_around_trip: Dawarich's points (with anomalies) from TRACK_GAP_SECONDS before
     the trip to TRACK_GAP_SECONDS after it."""
     if not any("track_id" in point for point in points_around_trip):
-        return []  # this Dawarich doesn't say which track a point belongs to
+        return None  # this Dawarich doesn't say which track a point belongs to
 
     tracker_id = tracker_id_for_trip(trip_uid)
     trip_points = [point for point in points_around_trip if point.get("tracker_id") == tracker_id]
     if not trip_points:
-        return []
+        return None
     noise = [point for point in trip_points if point.get("anomaly")]
     untracked = [point for point in trip_points if not point.get("anomaly") and point.get("track_id") is None]
     if len(noise) > len(trip_points) / 2:
-        return [f"Dawarich flagged {len(noise)} of the {len(trip_points)} points of {trip_name} as GPS noise, "
-                "so it isn't shown as a track."]
+        return (f"Dawarich flagged {len(noise)} of the {len(trip_points)} points of {trip_name} as GPS noise, "
+                "so it isn't shown as a track.", False)
     if untracked:
-        return [f"{len(untracked)} of the {len(trip_points)} points of {trip_name} belong to no track in Dawarich, "
-                "so the trip isn't shown as a track, and the phone's track may run in a straight line across it. "
-                + RECALCULATE_HINT]
+        return (f"{len(untracked)} of the {len(trip_points)} points of {trip_name} belonged to no track in "
+                "Dawarich, so the trip wasn't shown as a track, and the phone's track may have run in a "
+                "straight line across it.", True)
 
     trip_start, trip_end = route[0]["timestamp"], route[-1]["timestamp"]
     phone_points = sorted((point for point in points_around_trip
                            if not is_trainlog_point(point) and not point.get("anomaly")),
                           key=lambda point: point["timestamp"])
     if any(trip_start <= point["timestamp"] <= trip_end for point in phone_points):
-        return []  # phone points during the trip are deleted first; judged in a later run
+        return None  # phone points during the trip are deleted first; judged in a later run
     before = [point for point in phone_points if point["timestamp"] < trip_start]
     after = [point for point in phone_points if point["timestamp"] > trip_end]
     if before and after and before[-1].get("track_id") is not None \
             and before[-1].get("track_id") == after[0].get("track_id"):
-        return [f"The phone's track runs in a straight line across {trip_name}: Dawarich didn't cut it where "
-                "the trip is. " + RECALCULATE_HINT]
-    return []
+        return (f"The phone's track ran in a straight line across {trip_name}: Dawarich didn't cut it where "
+                "the trip is.", True)
+    return None
 
 
 def format_local_time(timestamp):

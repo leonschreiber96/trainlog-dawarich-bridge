@@ -1,20 +1,27 @@
 """Deleting the phone points recorded during trainlog trips, with a backup of everything deleted."""
 
 import json
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from . import database
 from .converter import convert_trip
-from .health_checks import TRACK_GAP_SECONDS, check_trip_tracks
+from .health_checks import TRACK_GAP_SECONDS, trip_track_problem
 from .phone_points import phone_points_during_trip, trip_time_looks_wrong
-from .trip_sync import describe_stored_trip
+from .trip_sync import describe_stored_trip, resend_trip
 
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
 # Whether Dawarich made proper tracks from them is checked too, once it had time for that.
 RECHECK_DAYS = 30
 TIME_FOR_DAWARICH_TO_BUILD_TRACKS = timedelta(hours=1)
+
+# Dawarich builds tracks from points up to 6 hours old as they come in (Tracks::IncrementalGenerator),
+# and from older ones in a separate backfill. Trips sent by the nightly run, mostly over 6 hours after
+# the ride, have got their tracks; the first one seen without was sent by a run during the same day.
+# So in case that's what went wrong, a trip is only sent again once its points go through the backfill.
+DAWARICH_REALTIME_WINDOW_SECONDS = 6 * 60 * 60
 
 # Points of trips imported before this app existed. They duplicate the trips this app sends.
 OLD_TRAINLOG_IMPORT_TRACKER_ID = "trainlog-csv"
@@ -38,9 +45,7 @@ def remove_phone_points_during_trips(dawarich, settings, log):
 
         found = phone_points_during_trip(route, points_around_trip)
         if not found:
-            if sent_long_enough_ago(trip):
-                for message in check_trip_tracks(describe_stored_trip(trip), trip["uid"], route, points_around_trip):
-                    log.warning(message, trip["uid"])
+            repair_trip_track(trip, route, points_around_trip, dawarich, log)
             continue
         if trip_time_looks_wrong(route, found):
             log.warning(
@@ -82,6 +87,29 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     for trip_uid, count in deleted_per_trip.items():
         database.add_phone_points_deleted(trip_uid, count)
     log.phone_points_deleted = len(points_to_delete)
+
+
+def repair_trip_track(trip, route, points_around_trip, dawarich, log):
+    """If Dawarich made no proper track from a trip, send its points again, once.
+
+    "Recalculate tracks & stats" in Dawarich would fix it too, but it deletes and rebuilds
+    all tracks of a year, and with them every manual transport mode correction."""
+    if not sent_long_enough_ago(trip):
+        return
+    problem = trip_track_problem(describe_stored_trip(trip), trip["uid"], route, points_around_trip)
+    if problem is None:
+        return
+    description, resending_can_fix_it = problem
+    if not resending_can_fix_it:
+        log.warning(description, trip["uid"])
+    elif trip["resent_for_track_at"]:
+        log.warning(f"{description} Sending its points again didn't help. \"Recalculate tracks & stats\" in "
+                    "Dawarich fixes it, but also deletes the manual transport mode corrections of that year.",
+                    trip["uid"])
+    elif time.time() - route[-1]["timestamp"] >= DAWARICH_REALTIME_WINDOW_SECONDS:
+        resend_trip(trip, route, dawarich)
+        database.record_trip_resent_for_track(trip["uid"])
+        log.info(f"{description} Its points were sent again, so Dawarich builds its track.", trip["uid"])
 
 
 def sent_long_enough_ago(trip):

@@ -1,7 +1,7 @@
 import unittest
 
 from trackfixer.converter import convert_trip
-from trackfixer.health_checks import check_phone_tracker_ids, check_shortcut_heartbeat, check_trip_tracks
+from trackfixer.health_checks import check_phone_tracker_ids, check_shortcut_heartbeat, trip_track_problem
 from trackfixer.phone_points import phone_points_during_trip, trip_time_looks_wrong
 
 from .helpers import (APP_TRACKER_ID, encode_path, example_bus_trip_row, example_day_points,
@@ -69,35 +69,36 @@ class TripTrackCheckTest(unittest.TestCase):
                             for point in self.route]
 
     def check(self, points):
-        return check_trip_tracks("the bus ride", "1234", self.route, points)
+        return trip_track_problem("the bus ride", "1234", self.route, points)
 
     def test_all_is_well(self):
-        self.assertEqual(self.check(self.walk_to_the_stop + self.trip_points + self.canteen), [])
+        self.assertIsNone(self.check(self.walk_to_the_stop + self.trip_points + self.canteen))
 
-    def test_trip_without_a_track(self):
+    def test_trip_without_a_track_is_fixed_by_sending_it_again(self):
         trip_points = [dict(point, track_id=None) for point in self.trip_points]
-        warnings = self.check(self.walk_to_the_stop + trip_points + self.canteen)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn(f"{len(trip_points)} of the {len(trip_points)} points of the bus ride belong to no track",
-                      warnings[0])
+        description, resending_can_fix_it = self.check(self.walk_to_the_stop + trip_points + self.canteen)
+        self.assertIn(f"{len(trip_points)} of the {len(trip_points)} points of the bus ride belonged to no track",
+                      description)
+        self.assertTrue(resending_can_fix_it)
 
-    def test_trip_flagged_as_gps_noise(self):
+    def test_trip_flagged_as_gps_noise_is_not(self):
         trip_points = [dict(point, track_id=None, anomaly=True) for point in self.trip_points]
-        warnings = self.check(self.walk_to_the_stop + trip_points + self.canteen)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("as GPS noise", warnings[0])
+        description, resending_can_fix_it = self.check(self.walk_to_the_stop + trip_points + self.canteen)
+        self.assertIn("as GPS noise", description)
+        self.assertFalse(resending_can_fix_it)
 
     def test_phone_track_running_straight_across_the_trip(self):
         canteen_in_the_walk_track = [dict(point, track_id=self.WALK_TRACK) for point in self.canteen]
-        warnings = self.check(self.walk_to_the_stop + self.trip_points + canteen_in_the_walk_track)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("straight line across the bus ride", warnings[0])
+        description, resending_can_fix_it = self.check(
+            self.walk_to_the_stop + self.trip_points + canteen_in_the_walk_track)
+        self.assertIn("straight line across the bus ride", description)
+        self.assertTrue(resending_can_fix_it)
 
     def test_nothing_is_judged_without_track_ids(self):
         # Older Dawarich versions don't say which track a point belongs to.
         points = [{key: value for key, value in point.items() if key != "track_id"}
                   for point in self.walk_to_the_stop + self.trip_points + self.canteen]
-        self.assertEqual(self.check(points), [])
+        self.assertIsNone(self.check(points))
 
 
 class HealthCheckTest(unittest.TestCase):

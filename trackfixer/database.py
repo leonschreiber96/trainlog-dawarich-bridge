@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS trips (
     sent_end_timestamp INTEGER,
     sent_point_count INTEGER,
     sent_at TEXT,
+    resent_for_track_at TEXT,         -- when its points were sent again because Dawarich made no proper track
     phone_points_deleted INTEGER NOT NULL DEFAULT 0,
     first_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -69,7 +70,15 @@ def init_database(database_file):
     database_file.parent.mkdir(parents=True, exist_ok=True)
     with connect() as connection:
         connection.executescript(SCHEMA)
+        add_columns_added_later(connection)
         connection.execute("PRAGMA journal_mode = WAL")
+
+
+def add_columns_added_later(connection):
+    """CREATE TABLE IF NOT EXISTS leaves existing tables as they are, so new columns are added here."""
+    trip_columns = {column["name"] for column in connection.execute("PRAGMA table_info(trips)")}
+    if "resent_for_track_at" not in trip_columns:
+        connection.execute("ALTER TABLE trips ADD COLUMN resent_for_track_at TEXT")
 
 
 @contextmanager
@@ -136,15 +145,21 @@ def set_trip_status(uid, status, status_detail=""):
 
 
 def record_trip_sent(uid, fingerprint, start_timestamp, end_timestamp, point_count):
+    """Points sent for a new version of a trip get a new chance at being resent for their track."""
     with connect() as connection:
         connection.execute(
             """
             UPDATE trips SET sent_fingerprint = ?, sent_start_timestamp = ?, sent_end_timestamp = ?,
-                             sent_point_count = ?, sent_at = ?
+                             sent_point_count = ?, sent_at = ?, resent_for_track_at = NULL
             WHERE uid = ?
             """,
             (fingerprint, start_timestamp, end_timestamp, point_count, now_iso(), uid),
         )
+
+
+def record_trip_resent_for_track(uid):
+    with connect() as connection:
+        connection.execute("UPDATE trips SET resent_for_track_at = ? WHERE uid = ?", (now_iso(), uid))
 
 
 def record_trip_points_removed(uid):

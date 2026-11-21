@@ -39,7 +39,8 @@ Every night (and on "Run now" or a CSV upload):
    Each point carries the trip's mode of transport (`MOTION_HINTS_BY_TRIP_TYPE`): walk, cycle
    and car trips are set for sure; for bus, train, tram, metro, ferry and flights Dawarich only
    accepts a hint and may still detect something else. Wrong modes can be corrected in
-   Dawarich's UI; corrections survive track recalculation.
+   Dawarich's UI. Dawarich keeps those corrections when it re-classifies a track, but not on
+   "Recalculate tracks & stats": that deletes and rebuilds all tracks of a year, corrections included.
 3. **Delete phone points during trips** (`phone_point_cleanup.py`). For trips sent or taken in
    the last 30 days: every phone point inside the trip's time, plus those up to 3 minutes
    before/after that lie within 50 m of the route, except those within 150 m of the departure or
@@ -50,8 +51,11 @@ Every night (and on "Run now" or a CSV upload):
    For the same trips, once sent over an hour ago, it checks that Dawarich made a track from the
    trip and cut the phone's track where the trip is. Dawarich only cuts the phone's track there if
    the trip has a track; otherwise, after the phone points are deleted, the phone's track runs
-   in a straight line from where the trip starts to where it ends. "Recalculate tracks & stats"
-   in Dawarich repairs both.
+   in a straight line from where the trip starts to where it ends. If either went wrong, the trip's
+   points are sent again, once its points are over 6 hours old (then Dawarich builds tracks from them
+   in a backfill, like for any late points, without touching other tracks). If that doesn't help
+   either, the run warns. "Recalculate tracks & stats" in Dawarich fixes it too, but costs the
+   year's manual mode corrections.
 4. **Health checks** (`health_checks.py`) on the last 24 hours: app and Shortcut points use the
    same tracker id, and the Shortcut didn't go silent for more than an hour.
 5. **Email** if anything above produced a warning or error.
@@ -93,6 +97,7 @@ two points at the same time and place), then deletes the original. Originals are
 docker compose exec dawarich-track-fixer python -m trackfixer fix-shortcut-tracker-ids \
   --tracker-id <the app's tracker id> --since 2025-01-01            # dry run: shows counts per month
 # ...same command with --apply to do it, then "Recalculate tracks & stats" in Dawarich
+# (that deletes the manual transport mode corrections of the years it rebuilds)
 ```
 
 ## Development

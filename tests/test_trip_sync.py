@@ -156,7 +156,7 @@ class PhonePointCleanupTest(unittest.TestCase):
         self.assertEqual(len(dawarich.points), len(example_day_points()) + len(expected_route))
         self.assertTrue(log.has_errors)
 
-    def test_reports_a_trip_dawarich_made_no_track_from_once_it_had_time_for_that(self):
+    def test_sends_a_trip_dawarich_made_no_track_from_again_once_then_warns(self):
         settings = temporary_settings()
         dawarich = FakeDawarich(example_day_points())
         sync_trips([example_bus_trip_row()], True, dawarich, new_run_log())
@@ -164,18 +164,40 @@ class PhonePointCleanupTest(unittest.TestCase):
         for point in dawarich.points:
             point["track_id"] = None if point["tracker_id"] == "trainlog-1234" else 1
 
-        def track_warnings(log):
-            return [message for _, message in log.problems if "belong to no track" in message]
+        def trip_point_ids():
+            return [point["id"] for point in points_of_tracker(dawarich, "trainlog-1234")]
 
+        def track_warnings(log):
+            return [message for _, message in log.problems if "no track" in message]
+
+        def an_hour_passes():
+            with database.connect() as connection:
+                connection.execute("UPDATE trips SET sent_at = '2026-11-10T12:00:00+00:00'")
+
+        # Right after sending, Dawarich is still building tracks.
+        ids_as_sent = trip_point_ids()
         just_sent_log = new_run_log()
         remove_phone_points_during_trips(dawarich, settings, just_sent_log)
+        self.assertEqual(trip_point_ids(), ids_as_sent)
         self.assertEqual(track_warnings(just_sent_log), [])
 
-        with database.connect() as connection:
-            connection.execute("UPDATE trips SET sent_at = '2026-11-10T12:00:00+00:00'")
-        later_log = new_run_log()
-        remove_phone_points_during_trips(dawarich, settings, later_log)
-        self.assertEqual(len(track_warnings(later_log)), 1)
+        # Later, the trip still has no track: its points are sent again.
+        an_hour_passes()
+        resending_log = new_run_log()
+        remove_phone_points_during_trips(dawarich, settings, resending_log)
+        self.assertNotEqual(trip_point_ids(), ids_as_sent)
+        self.assertEqual(len(trip_point_ids()), len(ids_as_sent))
+        self.assertIsNotNone(database.get_trip("1234")["resent_for_track_at"])
+        self.assertEqual(track_warnings(resending_log), [])
+
+        # Still no track after that: only a warning, no endless resending.
+        an_hour_passes()
+        resent_ids = trip_point_ids()
+        warning_log = new_run_log()
+        remove_phone_points_during_trips(dawarich, settings, warning_log)
+        self.assertEqual(trip_point_ids(), resent_ids)
+        self.assertEqual(len(track_warnings(warning_log)), 1)
+        self.assertIn("Sending its points again didn't help", track_warnings(warning_log)[0])
 
 
 if __name__ == "__main__":

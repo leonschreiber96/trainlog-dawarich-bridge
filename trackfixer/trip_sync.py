@@ -99,11 +99,25 @@ def sync_trip(row, dawarich, log):
         log.warning(f"Couldn't convert {describe_csv_row(row)}: {error}", uid)
         return
 
-    motion_hint = MOTION_HINTS_BY_TRIP_TYPE.get(row.get("type", ""), {})
-    dawarich.create_points(route, tracker_id_for_trip(uid), motion_hint)
+    send_trip_points(row, route, dawarich)
     database.save_trip(row, fingerprint, database.IN_DAWARICH, "; ".join(converter_warnings))
     database.record_trip_sent(uid, fingerprint, route[0]["timestamp"], route[-1]["timestamp"], len(route))
     log.trips_sent += 1
+
+
+def send_trip_points(row, route, dawarich):
+    motion_hint = MOTION_HINTS_BY_TRIP_TYPE.get(row.get("type", ""), {})
+    dawarich.create_points(route, tracker_id_for_trip(row["uid"]), motion_hint)
+
+
+def resend_trip(trip, route, dawarich):
+    """Delete a trip's points in Dawarich and send the same points again. Dawarich then builds
+    a track from them like from any points it gets late: only from points without a track,
+    so no other track (or its manual corrections) is touched."""
+    remove_trip_points(trip, dawarich)
+    send_trip_points(json.loads(trip["csv_row"]), route, dawarich)
+    database.record_trip_sent(trip["uid"], trip["sent_fingerprint"], route[0]["timestamp"], route[-1]["timestamp"],
+                              len(route))
 
 
 def is_up_to_date(stored_trip, fingerprint):
