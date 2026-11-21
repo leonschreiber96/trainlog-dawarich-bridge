@@ -1,5 +1,6 @@
 """Settings, read from environment variables. See .env.example for what each one does."""
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,21 @@ class Settings:
     @property
     def latest_trainlog_export_file(self):
         return self.data_directory / "latest-trainlog-export.csv"
+
+
+def tuning_number(name, default):
+    """A number from the environment for how a run behaves (see .env.example), or the default.
+    Modules read these once at import, into the constants at their top."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        raise SystemExit(f"{name} must be a number, not {value!r} (see .env.example)") from None
+    if not math.isfinite(number) or number < 0:
+        raise SystemExit(f"{name} must be 0 or more, not {value!r} (see .env.example)")
+    return int(number) if number.is_integer() else number
 
 
 def load_settings():

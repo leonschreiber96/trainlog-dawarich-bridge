@@ -11,7 +11,9 @@ import json
 import time
 
 from . import database
-from .converter import SIMPLIFY_TOLERANCE_METERS, convert_trip, parse_utc_timestamp
+from .config import tuning_number
+from .converter import (CHECKPOINT_INTERVAL_SECONDS, SIMPLIFY_TOLERANCE_METERS, convert_trip,
+                        parse_utc_timestamp)
 from .phone_points import is_drawn_trip, tracker_id_for_trip
 
 NOT_A_JOURNEY_TYPES = {"accommodation", "restaurant", "poi"}
@@ -44,13 +46,13 @@ FINGERPRINT_COLUMNS = (
 
 # A drawn trip follows the route as drawn more closely than a trainlog trip (25 m is a lot on a street of
 # houses, it cuts corners), at the cost of a few more points.
-DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS = 5
+DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS = tuning_number("DRAWN_TRIP_ROUTE_TOLERANCE_METERS", 2)
 
 # Increase this after changing converter.py, so all trips get converted and sent again.
 CONVERTER_VERSION = 2
 
 # More trips than this missing from one export at once looks like an incomplete download.
-MAX_TRIPS_REMOVED_PER_RUN = 10
+MAX_TRIPS_REMOVED_PER_RUN = tuning_number("MAX_TRIPS_REMOVED_PER_RUN", 10)
 
 
 def sync_trips(rows, is_complete_export, dawarich, log):
@@ -159,7 +161,7 @@ def remove_trips_deleted_in_trainlog(trip_uids_in_export, dawarich, log):
             f"{len(deleted_trips)} known trips are missing from the trainlog export. That's more than "
             f"{MAX_TRIPS_REMOVED_PER_RUN} at once, so none were removed from Dawarich, in case the export "
             "was incomplete. If you really deleted them in trainlog, raise MAX_TRIPS_REMOVED_PER_RUN "
-            "in trackfixer/trip_sync.py for one run."
+            "in the .env file for one run (then `docker compose up -d`)."
         )
         return
 
@@ -198,8 +200,10 @@ def trip_fingerprint(row):
     relevant = {column: row.get(column, "") for column in FINGERPRINT_COLUMNS}
     relevant["converter_version"] = CONVERTER_VERSION
     if is_drawn_trip(row["uid"]):
-        # Only for drawn trips, so changing it sends them again without touching trainlog trips.
+        # Only for drawn trips, so changing these sends them again without touching trainlog trips
+        # (that would rebuild their tracks and lose their manual mode corrections).
         relevant["simplify_tolerance_meters"] = DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS
+        relevant["checkpoint_interval_seconds"] = CHECKPOINT_INTERVAL_SECONDS
     return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()[:16]
 
 

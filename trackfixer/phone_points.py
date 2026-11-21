@@ -11,6 +11,8 @@ Dawarich's API or from converter.convert_trip.
 
 import math
 
+from .config import tuning_number
+
 TRAINLOG_TRACKER_PREFIX = "trainlog-"
 
 # Trips drawn on a map in this app (see drawn_trips.py) have uids like "drawn-3" and tracker ids
@@ -20,17 +22,17 @@ DRAWN_TRIP_TRACKER_PREFIX = "trackfixer-"
 
 # trainlog times are only accurate to the minute, and rides can run late. Phone points
 # up to this long before/after a trip are deleted too, but only if they lie on the route.
-TIME_BUFFER_SECONDS = 3 * 60
-MAX_DISTANCE_FROM_ROUTE_METERS = 50
+TIME_BUFFER_SECONDS = tuning_number("PHONE_POINTS_TIME_BUFFER_MINUTES", 3) * 60
+MAX_DISTANCE_FROM_ROUTE_METERS = tuning_number("PHONE_POINTS_MAX_DISTANCE_FROM_ROUTE_METERS", 50)
 
 # ...except at the station itself: a point there just before departure or just after arrival
 # is you waiting or getting off. It's where your walk to or from the station starts, so it
 # stays. (Platforms are long, and the station's position in trainlog is just one spot of it.)
-STATION_RADIUS_METERS = 150
+STATION_RADIUS_METERS = tuning_number("STATION_RADIUS_METERS", 150)
 
 # If most phone points recorded during a trip are this far from its route, the trip's
 # time in trainlog is probably wrong (wrong day, time zone...). Nothing gets deleted then.
-FAR_FROM_ROUTE_METERS = 1000
+FAR_FROM_ROUTE_METERS = tuning_number("WRONG_TRIP_TIME_DISTANCE_METERS", 1000)
 MIN_POINTS_TO_JUDGE_TRIP_TIME = 3
 
 METERS_PER_DEGREE_LATITUDE = 111_320

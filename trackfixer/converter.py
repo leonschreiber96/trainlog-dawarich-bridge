@@ -15,7 +15,7 @@ How the timestamps are made:
   the fastest section is made as slow as they allow.
 * Between two anchors, time is spread over the route by distance.
 * Finally the route is simplified: a vertex is only kept if it is needed to stay
-  within 25 m of the real route (or another tolerance), if it is an anchor, or as a
+  close enough to the real route (SIMPLIFY_TOLERANCE_METERS), if it is an anchor, or as a
   checkpoint roughly every 120 seconds. No two points share a second.
 """
 
@@ -24,11 +24,14 @@ import json
 import math
 from datetime import datetime, timezone
 
+from .config import tuning_number
+
 ENCODED_PATH_PRECISION = 5
 ANCHOR_TIME_WINDOW_SECONDS = 59
 MAX_SECTION_SPEED_FACTOR = 2
-SIMPLIFY_TOLERANCE_METERS = 25
-CHECKPOINT_INTERVAL_SECONDS = 120
+# For trainlog trips. Drawn trips have their own tolerance, see trip_sync.py.
+SIMPLIFY_TOLERANCE_METERS = tuning_number("TRAINLOG_ROUTE_TOLERANCE_METERS", 25)
+CHECKPOINT_INTERVAL_SECONDS = tuning_number("ROUTE_CHECKPOINT_SECONDS", 120)
 MAX_STOP_DISTANCE_FROM_ROUTE_METERS = 500
 EARTH_RADIUS_METERS = 6_371_000
 

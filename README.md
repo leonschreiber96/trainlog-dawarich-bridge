@@ -40,7 +40,8 @@ joined by straight lines. Map tiles come from tile.openstreetmap.org.
 A drawn trip is stored as a row in the format of trainlog's CSV export (`drawn_trips.py`), so it
 then goes through the same steps as a trainlog trip below: sent as its own tracker with its mode
 of transport set for sure, phone points during it deleted, its track checked. Its points follow the
-drawn route within 5 m (trainlog trips: 25 m, which would cut corners in a street). Saving or deleting
+drawn route within 2 m (trainlog trips: 25 m, which would cut corners in a street; both can be set
+in the `.env` file). Saving or deleting
 one starts a short run that does just that (no trainlog download, no health checks). Deleting a
 drawn trip removes its points from Dawarich; the phone points deleted for it stay deleted (they're
 in the backups).
@@ -70,7 +71,8 @@ Every night (and on "Run now", a CSV upload, or saving a drawn trip):
    arrival station (waiting or getting off: your walk starts there). Everything deleted is backed up to
    `deleted-points/` first. Nothing is deleted for a trip if most of its phone points are over
    1 km from the route (the trip's time in trainlog is probably wrong), or if a run would
-   delete more than `MAX_PHONE_POINTS_DELETED_PER_RUN` points.
+   delete more than `MAX_PHONE_POINTS_DELETED_PER_RUN` points. (These distances and times are the
+   defaults; they can be set in the `.env` file, see `.env.example`.)
    For the same trips, once sent over an hour ago, it checks that Dawarich made a track from the
    trip and cut the phone's track where the trip is. Dawarich only cuts the phone's track there if
    the trip has a track; otherwise, after the phone points are deleted, the phone's track runs
@@ -134,6 +136,7 @@ The tests use a made-up example day (built in `tests/helpers.py`, modelled on a 
 day) and a fake Dawarich.
 `python -m trackfixer run` does a single run without the web UI.
 
-Settings that rarely change are constants at the top of the modules, e.g. the time buffer and
-route distance in `phone_points.py`. After changing `converter.py`, increase
+The tuning settings in `.env.example` (distances, time buffers, limits) are read into the constants at
+the top of the modules when they're imported. The other constants there describe how Dawarich and
+trainlog work and stay in code. After changing `converter.py`, increase
 `CONVERTER_VERSION` in `trip_sync.py` so all trips are converted and sent again.

@@ -6,6 +6,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from . import database
+from .config import tuning_number
 from .health_checks import TRACK_GAP_SECONDS, trip_track_problem
 from .phone_points import phone_points_during_trip, trip_time_looks_wrong
 from .trip_sync import describe_stored_trip, resend_trip, route_of_trip, where_trip_is_kept
@@ -13,7 +14,7 @@ from .trip_sync import describe_stored_trip, resend_trip, route_of_trip, where_t
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
 # Whether Dawarich made proper tracks from them is checked too, once it had time for that.
-RECHECK_DAYS = 30
+RECHECK_DAYS = tuning_number("RECHECK_DAYS", 30)
 TIME_FOR_DAWARICH_TO_BUILD_TRACKS = timedelta(hours=1)
 
 # Dawarich builds tracks from points up to 6 hours old as they come in (Tracks::IncrementalGenerator),

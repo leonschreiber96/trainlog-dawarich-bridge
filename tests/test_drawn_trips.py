@@ -71,7 +71,7 @@ class DrawnTripFormTest(unittest.TestCase):
         self.assertEqual(row["utc_start_datetime"], "2026-11-10 11:05:00")
         self.assertEqual(row["start_datetime"], "2026-11-10 12:05:00")
 
-    def test_follows_the_drawn_route_within_5_meters(self):
+    def test_follows_the_drawn_route_within_2_meters(self):
         # A quarter circle of 200 m radius, as routing would draw a curved street.
         curve = [longitude_latitude((200 * math.sin(math.radians(angle)), 200 * math.cos(math.radians(angle))))
                  for angle in range(0, 91, 3)]
@@ -82,7 +82,7 @@ class DrawnTripFormTest(unittest.TestCase):
 
         for longitude, latitude in curve:
             vertex = {"longitude": longitude, "latitude": latitude}
-            self.assertLessEqual(distance_to_route_meters(vertex, route), 5.5)
+            self.assertLessEqual(distance_to_route_meters(vertex, route), 2.5)
 
     def test_long_straight_lines_get_points_in_between(self):
         start, three_km_south = longitude_latitude((0, 0)), longitude_latitude((0, -3000))
