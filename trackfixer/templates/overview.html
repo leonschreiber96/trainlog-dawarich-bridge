@@ -1,14 +1,18 @@
 {% extends "base.html" %}
+{% block head %}
+<style>
+  .connection { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center;
+                padding: 10px 0; border-top: 1px solid var(--border); }
+  .connection:first-of-type { margin-top: 8px; }
+  .connection-result { grid-column: 1 / -1; margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+  .connection-result:empty { display: none; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="cards">
   <div class="card">
     <dl>
       <dt>Next nightly run</dt><dd>{{ next_run.strftime("%Y-%m-%d %H:%M") }}</dd>
-      <dt>Dawarich</dt><dd>{{ settings.dawarich_url }}</dd>
-      <dt>trainlog download</dt>
-      <dd>{% if settings.trainlog_download_configured %}as {{ settings.trainlog_username }}{% else %}<span class="muted">not configured, upload CSVs below</span>{% endif %}</dd>
-      <dt>Problem emails</dt>
-      <dd>{% if settings.email_configured %}to {{ settings.email_to }}{% else %}<span class="muted">not configured</span>{% endif %}</dd>
       <dt>Trips</dt>
       <dd>
         {% for status, label in trip_status_labels.items() if trip_counts.get(status) %}
@@ -18,9 +22,31 @@
     </dl>
     <div class="form-row">
       <form method="post" action="{{ url_for('start_run') }}"><button class="primary" {% if run_is_going %}disabled{% endif %}>Run now</button></form>
-      {% if settings.email_configured %}
-      <form method="post" action="{{ url_for('test_email') }}"><button>Send test email</button></form>
-      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <strong>Connections</strong>
+    <div class="connection">
+      <div>Dawarich <span class="muted">{{ settings.dawarich_url }}</span></div>
+      <button type="button" data-test-url="{{ url_for('test_connection', name='dawarich') }}">Test</button>
+      <p class="connection-result" aria-live="polite"></p>
+    </div>
+    <div class="connection">
+      <div>trainlog download
+        {% if settings.trainlog_download_configured %}<span class="muted">as {{ settings.trainlog_username }}</span>
+        {% else %}<span class="muted">not configured, upload CSVs instead</span>{% endif %}</div>
+      <button type="button" data-test-url="{{ url_for('test_connection', name='trainlog') }}"
+              {% if not settings.trainlog_download_configured %}disabled{% endif %}>Test</button>
+      <p class="connection-result" aria-live="polite"></p>
+    </div>
+    <div class="connection">
+      <div>Problem emails
+        {% if settings.email_configured %}<span class="muted">to {{ settings.email_to }}</span>
+        {% else %}<span class="muted">not configured</span>{% endif %}</div>
+      <button type="button" data-test-url="{{ url_for('test_connection', name='email') }}"
+              {% if not settings.email_configured %}disabled{% endif %}>Send test email</button>
+      <p class="connection-result" aria-live="polite"></p>
     </div>
   </div>
 
@@ -63,4 +89,26 @@
 {% else %}
 <p class="muted">No runs yet.</p>
 {% endif %}
+
+<script>
+  for (const button of document.querySelectorAll('[data-test-url]')) {
+    button.addEventListener('click', async () => {
+      const result = button.closest('.connection').querySelector('.connection-result');
+      button.disabled = true;
+      result.className = 'connection-result muted';
+      result.textContent = 'Testing…';
+      try {
+        const response = await fetch(button.dataset.testUrl, {method: 'POST'});
+        const body = await response.json();
+        result.className = `connection-result ${body.ok ? 'ok' : 'error'}`;
+        result.textContent = `${body.ok ? '✓' : '✗'} ${body.message}`;
+      } catch (error) {
+        result.className = 'connection-result error';
+        result.textContent = `✗ The test didn't finish: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+</script>
 {% endblock %}

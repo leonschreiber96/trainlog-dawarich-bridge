@@ -8,12 +8,11 @@ from datetime import datetime
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 
-from . import database, runner
+from . import connection_checks, database, runner
 from .converter import trip_time_range
 from .dawarich import DawarichClient, DawarichError
 from .drawn_trips import (DRAWN_TRIP_TYPES, drawn_trips_for_list, form_values_for_editing,
                           stored_values_for_editing, trip_from_form)
-from .notifications import send_test_email
 from .phone_anchors import assess_phone_fixes, fixes_from_points
 from .phone_points import DRAWN_TRIP_UID_PREFIX, is_drawn_trip, is_trip_point, tracker_id_for_trip
 from .scheduler import next_nightly_run
@@ -24,6 +23,13 @@ TRIP_STATUS_LABELS = {
     database.SKIPPED: "skipped",
     database.FAILED: "failed",
     database.REMOVED: "deleted",
+}
+
+# What the Overview page's test buttons do (see connection_checks.py).
+CONNECTION_CHECKS = {
+    "dawarich": connection_checks.check_dawarich,
+    "trainlog": connection_checks.check_trainlog,
+    "email": connection_checks.check_email,
 }
 
 # The drawn trip editor shows Dawarich's points of a day (and of the night after, if a trip runs past midnight).
@@ -85,14 +91,13 @@ def create_app(settings):
             flash("A run is still going; upload the file again when it's done.")
         return redirect(url_for("overview"))
 
-    @app.post("/test-email")
-    def test_email():
-        try:
-            send_test_email(settings)
-            flash(f"Test email sent to {settings.email_to}.")
-        except Exception as error:
-            flash(f"Sending the test email failed: {error}")
-        return redirect(url_for("overview"))
+    @app.post("/connections/<name>/test")
+    def test_connection(name):
+        check = CONNECTION_CHECKS.get(name)
+        if check is None:
+            abort(404)
+        ok, message = check(settings)
+        return jsonify(ok=ok, message=message)
 
     @app.get("/trips")
     def trips():

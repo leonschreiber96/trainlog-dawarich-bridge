@@ -126,6 +126,9 @@ Every night (and on "Run now", a CSV upload, or saving a drawn trip):
    adjust the two paths (this repository, and the data directory).
 2. Copy `.env.example` next to it as `.env` and fill it in.
 3. `docker compose up -d --build`, then open `http://<homelab>:8000` (or the `PORT` set in `.env`).
+4. On the Overview page, test the connections: "Test" for Dawarich reads the last day's points with the
+   API key, "Test" for trainlog logs in and checks the export is there (without downloading it), and
+   "Send test email" sends one.
 
 If the build fails with `additional privileges requested: pass "--allow=fs.read=..."`, add
 `COMPOSE_BAKE=false` to the `.env`: newer Docker Compose versions build with "bake", which

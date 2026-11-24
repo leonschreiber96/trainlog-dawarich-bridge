@@ -22,6 +22,18 @@ class TrainlogError(Exception):
 
 def download_trips_csv(trainlog_url, username, password):
     """The same CSV as the export button on trainlog's website: all of the user's trips."""
+    with open_export(trainlog_url, username, password, timeout=300) as response:
+        return response.read().decode("utf-8-sig")
+
+
+def check_login(trainlog_url, username, password):
+    """Log in and check that the export answers with a CSV, without downloading it. Raises TrainlogError."""
+    with open_export(trainlog_url, username, password, timeout=60):
+        pass
+
+
+def open_export(trainlog_url, username, password, timeout):
+    """Log in, and open the export (its headers are read, its CSV not yet)."""
     cookies = http.cookiejar.CookieJar()
     browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
     browser.addheaders = [("User-Agent", USER_AGENT)]
@@ -40,18 +52,20 @@ def download_trips_csv(trainlog_url, username, password):
 
     export_url = f"{trainlog_url}/u/{urllib.parse.quote(username)}/export"
     try:
-        with browser.open(export_url, timeout=300) as response:
-            content_type = response.headers.get("Content-Type", "")
-            body = response.read()
+        response = browser.open(export_url, timeout=timeout)
     except urllib.error.HTTPError as error:
         raise TrainlogError(
             f"trainlog export failed with HTTP {error.code}. "
             "TRAINLOG_USERNAME must be the username, not the email address."
         ) from error
+    except urllib.error.URLError as error:
+        raise TrainlogError(f"Could not reach trainlog at {trainlog_url}: {error.reason}") from error
 
+    content_type = response.headers.get("Content-Type", "")
     if "csv" not in content_type:
+        response.close()
         raise TrainlogError(f"trainlog sent {content_type or 'something'} instead of a CSV; the login probably failed")
-    return body.decode("utf-8-sig")
+    return response
 
 
 def parse_trips_csv(csv_text):
