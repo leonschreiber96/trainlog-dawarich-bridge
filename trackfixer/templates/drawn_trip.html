@@ -16,6 +16,7 @@
                          margin-right: 6px; background: var(--dot); vertical-align: -1px; }
   .map-status { min-height: 1.5em; margin: 6px 0 0; }
   .point-popup button { margin: 6px 6px 0 0; padding: 3px 10px; }
+  .point-popup .fix-status { color: var(--muted); }
 </style>
 {% endblock %}
 {% block content %}
@@ -43,12 +44,15 @@
       paths", each click is joined to the previous one along roads and paths, found by routing.openstreetmap.de
       (the routing service of openstreetmap.org, which gets the two places); otherwise by a straight line.
       The dots are Dawarich's points of the day: click one to use its time as start or end.
+      Accurate phone points along the way time the route: where the trip was faster or slower than on average
+      (a traffic jam, a stop), its points follow them. Those in green do that; click one to leave it out.
     </p>
     <div class="form-row">
       <label><input type="checkbox" id="follow-roads" checked> Follow roads and paths</label>
       <button type="button" id="undo">Undo</button>
       <button type="button" id="clear">Clear route</button>
       <span id="route-summary" class="muted"></span>
+      <span id="route-timing" class="muted"></span>
     </div>
   </div>
 
@@ -57,6 +61,7 @@
     <span style="--dot: #7048e8">your route</span>
     <span style="--dot: #2f6fdb">phone points</span>
     <span style="--dot: #e8590c" id="deleted-legend">phone points during the trip: deleted after saving (with a backup)</span>
+    <span style="--dot: #2b8a3e">phone points that time the route</span>
     <span style="--dot: #9a9a94">other trips</span>
   </div>
   <p id="map-status" class="map-status muted"></p>
@@ -65,6 +70,7 @@
   <input type="hidden" name="end_timestamp">
   <input type="hidden" name="start_datetime">
   <input type="hidden" name="drawing">
+  <input type="hidden" name="ignored_phone_fixes">
   <div class="form-row">
     <button class="primary">Save</button>
     <a class="button" href="{{ url_for('drawn_trips') }}">Cancel</a>
@@ -84,8 +90,10 @@
   const tripTypes = {{ types | tojson }};
   const ownTrackerId = {{ own_tracker_id | tojson }};  // this trip's own points in Dawarich aren't shown
   const pointsUrl = {{ url_for('dawarich_points_for_map') | tojson }};
+  const phoneAnchorsUrl = {{ url_for('phone_anchors_for_map') | tojson }};
+  const drawnTripId = {{ drawn_trip_id | tojson }};
   const ROUTING_URL = 'https://routing.openstreetmap.de';
-  const COLORS = {route: '#7048e8', phone: '#2f6fdb', duringTrip: '#e8590c', otherTrips: '#9a9a94'};
+  const COLORS = {route: '#7048e8', phone: '#2f6fdb', duringTrip: '#e8590c', otherTrips: '#9a9a94', anchor: '#2b8a3e'};
 
   const form = document.getElementById('trip-form');
   const typeInput = document.getElementById('type');
@@ -239,6 +247,68 @@
     }
     document.getElementById('deleted-legend').textContent =
       `${countDuringTrip} phone points during the trip: deleted after saving (with a backup)`;
+    showPhoneFixes(new Set(phonePoints.map((point) => point.timestamp)));
+  }
+
+  // --- Phone points that time the route -------------------------------------------------
+
+  const ignoredPhoneFixes = new Set(values.ignored_phone_fixes || []);
+  let phoneFixes = new Map();  // timestamp -> fix, with what became of it ("used", "not needed", ...)
+  const FIX_STATUS_TEXT = {
+    'used': 'times the route',
+    'not needed': "fits the route's times without it",
+    'ignored': 'left out of the timing',
+    'unusable': 'not used for timing: too far from the route, or not plausible',
+    'contradicts a realtime stop time': 'not used for timing: contradicts a stop time',
+  };
+
+  function showPhoneFixes(timestampsInDawarich) {
+    // Drawn above Dawarich's points, in the same layer, so clicks reach both.
+    for (const fix of phoneFixes.values()) {
+      const used = fix.status === 'used';
+      const ignored = fix.status === 'ignored';
+      if (!used && !ignored && timestampsInDawarich.has(fix.timestamp)) continue;  // shown as a phone point
+      L.circleMarker([fix.latitude, fix.longitude], {
+        radius: used || ignored ? 7 : 4, color: used || ignored ? COLORS.anchor : COLORS.phone, weight: 2,
+        fillColor: COLORS.anchor, fillOpacity: used ? 0.9 : 0, dashArray: ignored ? '3 3' : null,
+        renderer: dawarichRenderer, bubblingMouseEvents: false,
+      }).bindTooltip(`${describePoint(fix)} · ${FIX_STATUS_TEXT[fix.status] || fix.status}`)
+        .on('click', () => openPointPopup(fix)).addTo(dawarichLayer);
+    }
+    const used = [...phoneFixes.values()].filter((fix) => fix.status === 'used').length;
+    document.getElementById('route-timing').textContent = used ? `timed by ${used} phone point${used > 1 ? 's' : ''}` : '';
+  }
+
+  let phoneFixRequest = 0;
+  let phoneFixTimer = null;
+  function loadPhoneFixesSoon() {
+    clearTimeout(phoneFixTimer);
+    phoneFixTimer = setTimeout(loadPhoneFixes, 400);
+  }
+
+  async function loadPhoneFixes() {
+    const request = ++phoneFixRequest;
+    const {start, end} = tripTimes();
+    if (!start || !end || end <= start || legs.flat().length < 2) {
+      phoneFixes = new Map();
+      showDawarichPoints();
+      return;
+    }
+    fillHiddenFields();
+    const body = new FormData(form);
+    if (drawnTripId) body.append('drawn_trip_id', drawnTripId);
+    try {
+      const response = await fetch(phoneAnchorsUrl, {method: 'POST', body});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (request !== phoneFixRequest) return;  // the route or times changed meanwhile
+      phoneFixes = new Map(result.fixes.map((fix) => [fix.timestamp, fix]));
+    } catch (error) {
+      if (request !== phoneFixRequest) return;
+      phoneFixes = new Map();
+      setStatus(`Couldn't find the phone points that time the route: ${error.message}`);
+    }
+    showDawarichPoints();
   }
 
   function openPointPopup(point) {
@@ -264,6 +334,18 @@
       timesChanged();
     });
     addButton('Add to route', () => addRoutePoint(point.longitude, point.latitude));
+    const fix = phoneFixes.get(point.timestamp);
+    if (fix) {
+      const status = document.createElement('div');
+      status.className = 'fix-status';
+      status.textContent = `For timing: ${FIX_STATUS_TEXT[fix.status] || fix.status}`;
+      content.append(status);
+      if (fix.status === 'ignored') {
+        addButton('Use for timing', () => { ignoredPhoneFixes.delete(fix.timestamp); loadPhoneFixes(); });
+      } else if (fix.status === 'used' || fix.status === 'not needed') {
+        addButton("Don't use for timing", () => { ignoredPhoneFixes.add(fix.timestamp); loadPhoneFixes(); });
+      }
+    }
     L.popup().setLatLng([point.latitude, point.longitude]).setContent(content).openOn(map);
   }
 
@@ -272,9 +354,11 @@
     document.getElementById('next-day').textContent = start && end && dayText(end) !== dayText(start) ? '(next day)' : '';
     showDawarichPoints();
     loadDawarichPoints();
+    loadPhoneFixesSoon();
     updateSummary();
   }
   for (const input of [dayInput, startInput, endInput]) input.addEventListener('change', timesChanged);
+  typeInput.addEventListener('change', loadPhoneFixesSoon);
 
   // --- Drawing the route ---------------------------------------------------------------
 
@@ -292,6 +376,7 @@
       }).addTo(waypointLayer);
     });
     updateSummary();
+    loadPhoneFixesSoon();
   }
 
   async function addRoutePoint(longitude, latitude) {
@@ -361,12 +446,17 @@
       event.preventDefault();
       return;
     }
+    fillHiddenFields();
+  });
+
+  function fillHiddenFields() {
     const {start, end} = tripTimes();
     form.elements.start_timestamp.value = start ? Math.round(start.getTime() / 1000) : '';
     form.elements.end_timestamp.value = end ? Math.round(end.getTime() / 1000) : '';
     form.elements.start_datetime.value = start ? `${dayText(start)} ${timeText(start)}` : '';
     form.elements.drawing.value = JSON.stringify({legs});
-  });
+    form.elements.ignored_phone_fixes.value = JSON.stringify([...ignoredPhoneFixes]);
+  }
 
   drawRoute();
   timesChanged();

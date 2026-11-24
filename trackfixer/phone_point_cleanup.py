@@ -7,9 +7,12 @@ from datetime import datetime, timedelta, timezone
 
 from . import database
 from .config import tuning_number
+from .converter import trip_time_range
 from .health_checks import TRACK_GAP_SECONDS, trip_track_problem
+from .phone_anchors import fixes_from_points
 from .phone_points import phone_points_during_trip, trip_time_looks_wrong
-from .trip_sync import describe_stored_trip, resend_trip, route_of_trip, where_trip_is_kept
+from .trip_sync import (describe_stored_trip, exact_anchors_for, resend_trip, route_of_trip, sync_trip,
+                        trip_fingerprint, where_trip_is_kept)
 
 # Trips sent to Dawarich, or that took place, within this many days are checked every run.
 # That catches phone points that reach Dawarich late, e.g. after the phone was offline on a train.
@@ -22,6 +25,11 @@ TIME_FOR_DAWARICH_TO_BUILD_TRACKS = timedelta(hours=1)
 # the ride, have got their tracks; the first one seen without was sent by a run during the same day.
 # So in case that's what went wrong, a trip is only sent again once its points go through the backfill.
 DAWARICH_REALTIME_WINDOW_SECONDS = 6 * 60 * 60
+
+# Accurate phone points that reach Dawarich after their trip was sent (the phone was offline) still
+# time it (see phone_anchors.py), for this long after sending. The trip is sent again then, which
+# loses a transport mode corrected in Dawarich meanwhile, so not days later.
+LATE_PHONE_FIXES_HOURS = tuning_number("PHONE_ANCHOR_LATE_POINTS_HOURS", 48)
 
 # Points of trips imported before this app existed. They duplicate the trips this app sends.
 OLD_TRAINLOG_IMPORT_TRACKER_ID = "trainlog-csv"
@@ -36,7 +44,8 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     trips_with_old_trainlog_imports = []
 
     for trip in trips:
-        route, _ = route_of_trip(json.loads(trip["csv_row"]))
+        row = json.loads(trip["csv_row"])
+        route, _ = route_of_trip(row, database.sent_exact_anchors(trip))
         points_around_trip = dawarich.get_points(
             route[0]["timestamp"] - TRACK_GAP_SECONDS, route[-1]["timestamp"] + TRACK_GAP_SECONDS
         )
@@ -55,6 +64,7 @@ def remove_phone_points_during_trips(dawarich, settings, log):
                 trip["uid"],
             )
             continue
+        use_late_phone_fixes(trip, row, found, dawarich, log)
         for point in found:
             points_to_delete[point["id"]] = point
             trip_uid_of_point[point["id"]] = trip["uid"]
@@ -88,6 +98,23 @@ def remove_phone_points_during_trips(dawarich, settings, log):
     for trip_uid, count in deleted_per_trip.items():
         database.add_phone_points_deleted(trip_uid, count)
     log.phone_points_deleted = len(points_to_delete)
+
+
+def use_late_phone_fixes(trip, row, phone_points, dawarich, log):
+    """Keep the accurate ones among the phone points about to be deleted as phone fixes of the trip.
+    If they change how it's timed, send it again (if it was sent recently enough)."""
+    if not trip["sent_at"] or (datetime.now(timezone.utc) - datetime.fromisoformat(trip["sent_at"])
+                               > timedelta(hours=LATE_PHONE_FIXES_HOURS)):
+        return
+    start, end = trip_time_range(row)
+    new_fixes = database.add_phone_fixes(trip["uid"], fixes_from_points(phone_points, start, end))
+    if not new_fixes:
+        return
+    if exact_anchors_for(row)[0] == database.sent_exact_anchors(trip):
+        database.record_trip_fingerprint(trip["uid"], trip_fingerprint(row))
+        return
+    sync_trip(row, dawarich, log, because=f"{new_fixes} accurate phone point(s) of it reached Dawarich late and "
+                                          "show it went faster or slower than its points had it")
 
 
 def repair_trip_track(trip, route, points_around_trip, dawarich, log):

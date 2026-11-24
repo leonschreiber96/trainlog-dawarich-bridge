@@ -2,7 +2,7 @@ import json
 import unittest
 from datetime import datetime, timezone
 
-from trackfixer.converter import convert_trip, distance_meters
+from trackfixer.converter import convert_trip, decode_path, distance_meters
 
 from .helpers import encode_path
 
@@ -28,9 +28,10 @@ def dense_route(corners, step_meters=20):
     return route
 
 
-def s_bahn_trip_row(bellevue_time="2026-11-12 09:01:00", tiergarten_time="2026-11-12 09:01:00"):
+def s_bahn_trip_row(bellevue_time="2026-11-12 09:01:00", tiergarten_time="2026-11-12 09:01:00", realtime=True):
+    keys = ("arr_rt", "dep_rt") if realtime else ("arr", "dep")
     waypoints = [
-        {"lat": STATIONS[name][1], "lng": STATIONS[name][0], "stop": {"arr_rt": time, "dep_rt": time}}
+        {"lat": STATIONS[name][1], "lng": STATIONS[name][0], "stop": {keys[0]: time, keys[1]: time}}
         for name, time in [("Hauptbahnhof", "2026-11-12 08:57:00"), ("Bellevue", bellevue_time)]
     ]
     return {
@@ -49,6 +50,13 @@ def time_at(route, station):
     nearest = min(route, key=lambda point: distance_meters([point["longitude"], point["latitude"]],
                                                            STATIONS[station]))
     return nearest["timestamp"]
+
+
+def meters_before(station, row, meters_earlier=0):
+    """Meters along the trip's route to a station (or some meters before it)."""
+    route = decode_path(row["path"])
+    nearest = min(range(len(route)), key=lambda index: distance_meters(route[index], STATIONS[station]))
+    return sum(distance_meters(a, b) for a, b in zip(route[:nearest], route[1:nearest + 1])) - meters_earlier
 
 
 def utc(text):
@@ -86,6 +94,40 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(route[0]["timestamp"], utc("2026-11-12 08:54:00"))
         self.assertEqual(route[-1]["timestamp"], utc("2026-11-12 09:02:00"))
         self.assertEqual(warnings, [])
+
+
+    def test_without_exact_anchors_nothing_changes(self):
+        self.assertEqual(convert_trip(s_bahn_trip_row()), convert_trip(s_bahn_trip_row(), exact_anchors=[]))
+
+    def test_an_exact_anchor_keeps_its_second_even_where_the_train_was_fast(self):
+        # Stood still at Hauptbahnhof until 08:59:10, then 2 km to Bellevue by 09:01:
+        # faster than twice the average speed, which minute-precise stops may not be.
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:03:00")
+        leaving = utc("2026-11-12 08:59:10")
+        route, warnings = convert_trip(row, exact_anchors=[[leaving, meters_before("Hauptbahnhof", row) + 1]])
+
+        self.assertIn(leaving, [point["timestamp"] for point in route])
+        self.assertLess(time_at(route, "Bellevue"), utc("2026-11-12 09:02:00"))
+        self.assertEqual([warning for warning in warnings if "phone" in warning or "Inconsistent" in warning], [])
+
+    def test_a_realtime_stop_time_wins_over_a_contradicting_phone_point(self):
+        # The phone point has the train past Hauptbahnhof before trainlog's realtime time there.
+        row = s_bahn_trip_row()
+        too_early = utc("2026-11-12 08:55:30")
+        route, warnings = convert_trip(row, exact_anchors=[[too_early, meters_before("Hauptbahnhof", row) + 200]])
+
+        self.assertNotIn(too_early, [point["timestamp"] for point in route])
+        self.assertGreaterEqual(time_at(route, "Hauptbahnhof"), utc("2026-11-12 08:57:00"))
+        self.assertIn("1 phone point(s) contradicted trainlog's realtime stop times and weren't used", warnings)
+
+    def test_a_scheduled_stop_time_contradicted_by_the_phone_is_left_out(self):
+        # The S-Bahn ran 3 minutes late, which trainlog's scheduled times don't know.
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:06:00", realtime=False)
+        near_bellevue = utc("2026-11-12 09:04:00")
+        route, warnings = convert_trip(row, exact_anchors=[[near_bellevue, meters_before("Bellevue", row, 50)]])
+
+        self.assertGreaterEqual(time_at(route, "Bellevue"), near_bellevue)  # not at 09:01
+        self.assertIn("1 scheduled stop time(s) contradicted the phone's points and weren't used", warnings)
 
 
 if __name__ == "__main__":

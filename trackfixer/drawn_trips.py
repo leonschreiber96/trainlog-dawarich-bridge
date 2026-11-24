@@ -5,6 +5,10 @@ A drawn trip is stored as a row in the format of trainlog's CSV export, so from 
 handled like a trainlog trip: its points go to Dawarich as their own tracker, the phone points
 recorded during it are deleted, and its track is checked. Deleting a drawn trip removes its
 points from Dawarich in the next run.
+
+Like a trainlog trip, it's timed with the accurate phone points recorded during it (see
+phone_anchors.py). On the map, single ones can be left out; their times are kept in the row
+as "ignored_phone_fixes", a column trainlog doesn't have.
 """
 
 import json
@@ -32,6 +36,7 @@ MAX_VERTEX_SPACING_METERS = 250
 MAX_TRIP_HOURS = 24
 MAX_NAME_LENGTH = 200
 MAX_DRAWN_VERTICES = 50_000
+MAX_IGNORED_PHONE_FIXES = 100_000
 
 
 def sync_drawn_trips(dawarich, log):
@@ -94,7 +99,21 @@ def trip_from_form(form):
         "utc_end_datetime": utc_text(end),
         "path": encode_path(vertices),
     }
+    ignored_phone_fixes = parse_ignored_phone_fixes(form.get("ignored_phone_fixes"))
+    if ignored_phone_fixes:  # only then, so trips drawn before this existed keep their fingerprint
+        row["ignored_phone_fixes"] = ignored_phone_fixes
     return row, drawing
+
+
+def parse_ignored_phone_fixes(text):
+    """The times of the phone points not to time the trip with, chosen on the map (a JSON list)."""
+    try:
+        timestamps = json.loads(text or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(timestamps, list) or len(timestamps) > MAX_IGNORED_PHONE_FIXES:
+        return []
+    return sorted({timestamp for timestamp in timestamps if type(timestamp) is int and timestamp > 0})  # not bools
 
 
 def form_values_for_editing(form):
@@ -110,6 +129,7 @@ def form_values_for_editing(form):
         "start_timestamp": form_timestamp(form, "start_timestamp"),
         "end_timestamp": form_timestamp(form, "end_timestamp"),
         "legs": legs,
+        "ignored_phone_fixes": parse_ignored_phone_fixes(form.get("ignored_phone_fixes")),
     }
 
 
@@ -122,6 +142,7 @@ def stored_values_for_editing(drawn_trip):
         "start_timestamp": utc_text_to_timestamp(row["utc_start_datetime"]),
         "end_timestamp": utc_text_to_timestamp(row["utc_end_datetime"]),
         "legs": json.loads(drawn_trip["drawing"])["legs"],
+        "ignored_phone_fixes": row.get("ignored_phone_fixes", []),
     }
 
 

@@ -10,7 +10,7 @@ from trackfixer.drawn_trips import MAX_VERTEX_SPACING_METERS, sync_drawn_trips, 
 from trackfixer.phone_point_cleanup import remove_phone_points_during_trips
 from trackfixer.phone_points import distance_to_route_meters, is_trip_point
 from trackfixer.run_log import RunLog
-from trackfixer.trip_sync import route_of_trip, sync_trips
+from trackfixer.trip_sync import route_of_trip, sync_trips, trip_fingerprint
 from trackfixer.web import create_app
 
 from .helpers import (BERLIN, HOME, FakeDawarich, example_bus_trip_row, example_day_points,
@@ -128,6 +128,29 @@ class DrawnTripSyncTest(unittest.TestCase):
 
         sync_drawn_trips(self.dawarich, new_run_log())
         self.assertEqual(database.get_trip("drawn-1")["sent_point_count"], len(drawn_points(self.dawarich)))
+
+    def test_trips_without_phone_fixes_keep_their_fingerprint(self):
+        # As before phone fixes existed, so such trips weren't sent again after the update.
+        row, _ = trip_from_form(walk_form(ignored_phone_fixes="[]"))
+        self.assertNotIn("ignored_phone_fixes", row)
+        self.assertEqual(trip_fingerprint(dict(row, uid="drawn-1")), "00434dea6eb7e2a6")
+
+    def test_is_timed_by_the_phone_points_of_the_walk(self):
+        # The app's first point of the walk, 100 m from home at 12:08:40: evenly spread over the
+        # 10.5 minutes, the walk would be there at 12:06:30.
+        dawarich = FakeDawarich(example_day_points())
+        save_walk()
+        sync_drawn_trips(dawarich, new_run_log())
+
+        self.assertIn(berlin_timestamp(12, 8, 40), [point["timestamp"] for point in drawn_points(dawarich)])
+        self.assertIn("Timed with", database.get_trip("drawn-1")["status_detail"])
+
+    def test_phone_points_left_out_on_the_map_dont_time_it(self):
+        dawarich = FakeDawarich(example_day_points())
+        save_walk(ignored_phone_fixes=json.dumps([berlin_timestamp(12, 8, 40)]))
+        sync_drawn_trips(dawarich, new_run_log())
+
+        self.assertNotIn(berlin_timestamp(12, 8, 40), [point["timestamp"] for point in drawn_points(dawarich)])
 
     def test_trips_drawn_before_a_change_of_the_tolerance_are_sent_again(self):
         save_walk()
@@ -247,6 +270,33 @@ class DrawnTripPagesTest(unittest.TestCase):
         self.assertEqual({point["is_trip_point"] for point in points}, {True, False})  # old trainlog import, phone
         self.assertIsInstance(points[0]["latitude"], float)
         self.assertEqual(too_long.status_code, 400)
+
+    def test_the_map_shows_which_phone_points_time_the_trip(self):
+        dawarich = FakeDawarich(example_day_points())
+        first_point_of_the_walk = berlin_timestamp(12, 8, 40)
+
+        def fixes(**changes):
+            with unittest.mock.patch("trackfixer.web.DawarichClient", return_value=dawarich):
+                response = self.client.post("/drawn-trips/phone-anchors", data=walk_form(origin="", **changes))
+            self.assertEqual(response.status_code, 200)
+            return {fix["timestamp"]: fix["status"] for fix in response.get_json()["fixes"]}
+
+        # The app's 6 points of the walk; not the Shortcut's (no accuracy) at 12:15:15.
+        self.assertEqual(len(fixes()), 6)
+        self.assertEqual(fixes()[first_point_of_the_walk], "used")
+        self.assertEqual(fixes(ignored_phone_fixes=json.dumps([first_point_of_the_walk]))[first_point_of_the_walk],
+                         "ignored")
+        self.assertEqual(fixes(drawing="not json"), {})
+
+    def test_the_map_still_shows_phone_points_deleted_for_the_trip(self):
+        dawarich = FakeDawarich(example_day_points())
+        self.client.post("/drawn-trips/new", data=walk_form())
+        sync_drawn_trips(dawarich, new_run_log())
+        remove_phone_points_during_trips(dawarich, self.settings, new_run_log())
+
+        with unittest.mock.patch("trackfixer.web.DawarichClient", return_value=dawarich):
+            response = self.client.post("/drawn-trips/phone-anchors", data=dict(walk_form(), drawn_trip_id="1"))
+        self.assertIn("used", {fix["status"] for fix in response.get_json()["fixes"]})
 
     def test_the_trip_list_links_drawn_trips_to_their_editor(self):
         self.client.post("/drawn-trips/new", data=walk_form())

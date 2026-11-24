@@ -9,10 +9,12 @@ from datetime import datetime
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from . import database, runner
+from .converter import trip_time_range
 from .dawarich import DawarichClient, DawarichError
 from .drawn_trips import (DRAWN_TRIP_TYPES, drawn_trips_for_list, form_values_for_editing,
                           stored_values_for_editing, trip_from_form)
 from .notifications import send_test_email
+from .phone_anchors import assess_phone_fixes, fixes_from_points
 from .phone_points import DRAWN_TRIP_UID_PREFIX, is_drawn_trip, is_trip_point, tracker_id_for_trip
 from .scheduler import next_nightly_run
 
@@ -160,6 +162,36 @@ def create_app(settings):
             }
             for point in points
         ])
+
+    @app.post("/drawn-trips/phone-anchors")
+    def phone_anchors_for_map():
+        """Which phone points would time the drawn trip as it is in the editor (not saved yet):
+        those kept for it before (if it was saved) and those in Dawarich now."""
+        form = request.form.to_dict()
+        form["origin"] = form.get("origin", "").strip() or "-"  # names don't matter here
+        form["destination"] = form.get("destination", "").strip() or "-"
+        try:
+            row, _ = trip_from_form(form)
+            start, end = trip_time_range(row)
+        except ValueError:
+            return jsonify(fixes=[])
+
+        fixes = {}
+        drawn_trip_id = request.form.get("drawn_trip_id", type=int)
+        if drawn_trip_id is not None:
+            fixes = {fix["timestamp"]: fix for fix in database.phone_fixes(database.drawn_trip_uid(drawn_trip_id))}
+        try:
+            points = DawarichClient(settings.dawarich_url, settings.dawarich_api_key).get_points(start, end)
+        except DawarichError as error:
+            return jsonify(error=str(error)), 502
+        for fix in fixes_from_points(points, start, end):
+            fixes.setdefault(fix["timestamp"], fix)
+        try:
+            _, statuses = assess_phone_fixes(row, list(fixes.values()))
+        except ValueError:
+            return jsonify(fixes=[])
+        return jsonify(fixes=[dict(fix, status=statuses[timestamp]) for timestamp, fix in sorted(fixes.items())
+                              if start < timestamp < end])
 
     def render_drawn_trip_editor(drawn_trip_id, values, error=None):
         uid = database.drawn_trip_uid(drawn_trip_id) if drawn_trip_id is not None else None

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS trips (
     sent_start_timestamp INTEGER,     -- time range of those points
     sent_end_timestamp INTEGER,
     sent_point_count INTEGER,
+    sent_anchors TEXT,                -- exact anchors those points were timed with (JSON), see phone_anchors.py
     sent_at TEXT,
     resent_for_track_at TEXT,         -- when its points were sent again because Dawarich made no proper track
     phone_points_deleted INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +50,17 @@ CREATE TABLE IF NOT EXISTS drawn_trips (
     drawing TEXT NOT NULL,            -- the route as drawn on the map, as JSON, to edit it again
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+-- Accurate phone points recorded during a trip, kept before they're deleted from Dawarich:
+-- they time the trip (see phone_anchors.py).
+CREATE TABLE IF NOT EXISTS phone_fixes (
+    trip_uid TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    accuracy REAL NOT NULL,
+    PRIMARY KEY (trip_uid, timestamp)
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -90,6 +102,8 @@ def add_columns_added_later(connection):
     trip_columns = {column["name"] for column in connection.execute("PRAGMA table_info(trips)")}
     if "resent_for_track_at" not in trip_columns:
         connection.execute("ALTER TABLE trips ADD COLUMN resent_for_track_at TEXT")
+    if "sent_anchors" not in trip_columns:
+        connection.execute("ALTER TABLE trips ADD COLUMN sent_anchors TEXT")
 
 
 @contextmanager
@@ -155,17 +169,29 @@ def set_trip_status(uid, status, status_detail=""):
         )
 
 
-def record_trip_sent(uid, fingerprint, start_timestamp, end_timestamp, point_count):
+def record_trip_sent(uid, fingerprint, start_timestamp, end_timestamp, point_count, exact_anchors):
     """Points sent for a new version of a trip get a new chance at being resent for their track."""
     with connect() as connection:
         connection.execute(
             """
             UPDATE trips SET sent_fingerprint = ?, sent_start_timestamp = ?, sent_end_timestamp = ?,
-                             sent_point_count = ?, sent_at = ?, resent_for_track_at = NULL
+                             sent_point_count = ?, sent_anchors = ?, sent_at = ?, resent_for_track_at = NULL
             WHERE uid = ?
             """,
-            (fingerprint, start_timestamp, end_timestamp, point_count, now_iso(), uid),
+            (fingerprint, start_timestamp, end_timestamp, point_count,
+             json.dumps(exact_anchors) if exact_anchors else None, now_iso(), uid),
         )
+
+
+def record_trip_fingerprint(uid, fingerprint):
+    """The trip's points in Dawarich are still right for a new fingerprint (e.g. new phone fixes changed nothing)."""
+    with connect() as connection:
+        connection.execute("UPDATE trips SET fingerprint = ?, sent_fingerprint = ? WHERE uid = ?",
+                           (fingerprint, fingerprint, uid))
+
+
+def sent_exact_anchors(trip):
+    return json.loads(trip["sent_anchors"]) if trip["sent_anchors"] else []
 
 
 def record_trip_resent_for_track(uid):
@@ -178,7 +204,7 @@ def record_trip_points_removed(uid):
         connection.execute(
             """
             UPDATE trips SET sent_fingerprint = NULL, sent_start_timestamp = NULL, sent_end_timestamp = NULL,
-                             sent_point_count = NULL, sent_at = NULL
+                             sent_point_count = NULL, sent_anchors = NULL, sent_at = NULL
             WHERE uid = ?
             """,
             (uid,),
@@ -230,6 +256,32 @@ def trip_counts_by_status():
     return {row["status"]: row["count"] for row in rows}
 
 
+# --- Phone fixes ------------------------------------------------------------------
+
+
+def add_phone_fixes(trip_uid, fixes):
+    """Keep phone fixes of a trip (see phone_anchors.fixes_from_points). Returns how many were new."""
+    with connect() as connection:
+        before = connection.total_changes
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO phone_fixes (trip_uid, timestamp, latitude, longitude, accuracy)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [(trip_uid, fix["timestamp"], fix["latitude"], fix["longitude"], fix["accuracy"]) for fix in fixes],
+        )
+        return connection.total_changes - before
+
+
+def phone_fixes(trip_uid):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT timestamp, latitude, longitude, accuracy FROM phone_fixes WHERE trip_uid = ? ORDER BY timestamp",
+            (trip_uid,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 # --- Drawn trips ------------------------------------------------------------------
 
 
@@ -279,7 +331,7 @@ def all_drawn_trips():
         return connection.execute(
             """
             SELECT drawn_trips.id, drawn_trips.csv_row, trips.status, trips.status_detail, trips.sent_fingerprint,
-                   trips.sent_point_count, trips.phone_points_deleted, trips.sent_at
+                   trips.sent_point_count, trips.sent_anchors, trips.phone_points_deleted, trips.sent_at
             FROM drawn_trips LEFT JOIN trips ON trips.uid = ? || drawn_trips.id
             """,
             (DRAWN_TRIP_UID_PREFIX,),
