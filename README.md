@@ -52,8 +52,12 @@ in the backups).
 
 ## Timing trips with the phone's points
 
-A trip's times are only known where it starts and ends, and at stops with a time in trainlog. Where a
-stop's departure is in a later minute than its arrival, the ride waits there from arrival to departure.
+A trip's times are only known where it starts and ends, and at stops with a time in trainlog. trainlog
+stores a stop's realtime arrival or departure only where it differs from the schedule, so in a trip with
+realtime times, a stop's scheduled time counts as what happened wherever it has no realtime one (the train
+was on time there). Only in a trip without any realtime times are its delays spread over the scheduled
+stop times. Where a stop's departure is in a later minute than its arrival, the ride waits there from
+arrival to departure.
 In between, time is spread evenly over the route. That's wrong when the ride wasn't steady: a train that
 stood still between two stations, a car in a traffic jam. The phone's points show what really happened,
 even though the line it draws between them is bad. So the accurate ones (app points with an accuracy of
@@ -72,9 +76,9 @@ Which points become anchors, each time the trip is converted:
 - Only where they change something: as long as a point is over 60 s off the times the trip has
   without it, the one farthest off becomes an anchor. A ride that went as planned gets none and converts
   exactly as before; a traffic jam typically needs two or three.
-- A realtime stop time from trainlog wins over a phone point that contradicts it (that one is left out,
-  and the trip's notes say so). A phone point wins over a scheduled stop time: the delay probably
-  wasn't entered in trainlog.
+- A stop time from a trip with realtime times wins over a phone point that contradicts it (that one is
+  left out, and the trip's notes say so). In a trip without realtime times, a phone point wins over a
+  scheduled stop time: the delay probably wasn't entered in trainlog.
 
 The points are taken right before a trip is sent, while they're still in Dawarich. Points that reach
 Dawarich later (the phone was offline) are added by the next runs, for 48 hours after sending. If they

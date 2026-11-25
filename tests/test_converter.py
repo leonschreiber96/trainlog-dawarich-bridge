@@ -151,6 +151,38 @@ class ConverterTest(unittest.TestCase):
         self.assertGreaterEqual(time_at(route, "Hauptbahnhof"), utc("2026-11-12 08:57:00"))
         self.assertIn("1 phone point(s) contradicted trainlog's realtime stop times and weren't used", warnings)
 
+    def test_in_a_trip_with_realtime_times_a_stop_without_them_was_on_time(self):
+        # trainlog only stores realtime times that differ from the schedule: Bellevue was on time,
+        # although the S-Bahn reached Tiergarten 8 minutes late (like ICE 643's Bochum on 2026-11-25).
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:02:00")
+        waypoints = json.loads(row["waypoints"])
+        waypoints[1]["stop"] = {"arr": "2026-11-12 09:01:00", "dep": "2026-11-12 09:01:00"}
+        row = dict(row, waypoints=json.dumps(waypoints), arrival_delay="480")
+        route, _ = convert_trip(row)
+
+        self.assertTrue(utc("2026-11-12 09:01:00") <= time_at(route, "Bellevue") <= utc("2026-11-12 09:01:59"))
+        self.assertEqual(route[-1]["timestamp"], utc("2026-11-12 09:10:00"))
+
+    def test_a_stop_with_only_a_realtime_departure_arrived_on_time(self):
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:05:00")
+        waypoints = json.loads(row["waypoints"])
+        waypoints[0]["stop"] = {"arr": "2026-11-12 08:57:00", "dep": "2026-11-12 08:58:00",
+                                "dep_rt": "2026-11-12 09:00:00"}
+        route, _ = convert_trip(dict(row, waypoints=json.dumps(waypoints)))
+
+        at_hauptbahnhof = [point["timestamp"] for point in route
+                           if distance_meters([point["longitude"], point["latitude"]], STATIONS["Hauptbahnhof"]) < 30]
+        arrival, departure = at_hauptbahnhof
+        self.assertTrue(utc("2026-11-12 08:57:00") <= arrival <= utc("2026-11-12 08:57:59"))
+        self.assertTrue(utc("2026-11-12 09:00:00") <= departure <= utc("2026-11-12 09:00:59"))
+
+    def test_without_any_realtime_times_the_delay_is_spread_over_scheduled_stops(self):
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:02:00", realtime=False)
+        route, _ = convert_trip(dict(row, arrival_delay="480"))
+
+        # Bellevue is 7 of the 8 scheduled minutes in, so it gets 7/8 of the delay: 09:08.
+        self.assertTrue(utc("2026-11-12 09:08:00") <= time_at(route, "Bellevue") <= utc("2026-11-12 09:08:59"))
+
     def test_a_scheduled_stop_time_contradicted_by_the_phone_is_left_out(self):
         # The S-Bahn ran 3 minutes late, which trainlog's scheduled times don't know.
         row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:06:00", realtime=False)

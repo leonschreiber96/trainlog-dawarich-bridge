@@ -62,7 +62,7 @@ class Anchor(NamedTuple):
     index: int
     time: float
     kind: str
-    realtime: bool = False  # for stops: a realtime time from trainlog, not a scheduled one
+    realtime: bool = False  # for stops: what really happened (see time_at_stop), not a scheduled guess
 
     @property
     def window_seconds(self):
@@ -317,17 +317,21 @@ def parse_waypoints(value):
 
 def stays_at_stops(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings):
     """The stops along the trip with a time, as Stays at their nearest route vertex, in route order."""
-    stays = []
-    previous_index = 0
-    for waypoint in parse_waypoints(row.get("waypoints")):
+    waypoints = parse_waypoints(row.get("waypoints"))
+    for waypoint in waypoints:
         if not isinstance(waypoint, dict):
             raise ValueError("Waypoint must be an object")
-        stop = waypoint.get("stop") or {}
-        if not isinstance(stop, dict):
+        if not isinstance(waypoint.get("stop") or {}, dict):
             raise ValueError("Waypoint stop must be an object")
+    trip_has_realtime = any(has_time(waypoint.get("stop") or {}, key)
+                            for waypoint in waypoints for key in ("arr_rt", "dep_rt"))
 
+    stays = []
+    previous_index = 0
+    for waypoint in waypoints:
+        stop = waypoint.get("stop") or {}
         arrival, departure, is_realtime = time_at_stop(
-            stop, scheduled_start, scheduled_end, departure_delay, arrival_delay)
+            stop, scheduled_start, scheduled_end, departure_delay, arrival_delay, trip_has_realtime)
         latitude = waypoint.get("lat", stop.get("lat"))
         longitude = waypoint.get("lng", stop.get("lng"))
         if arrival is None or latitude is None or longitude is None:
@@ -352,17 +356,29 @@ def stays_at_stops(row, route, scheduled_start, scheduled_end, departure_delay, 
     return stays
 
 
-def time_at_stop(stop, scheduled_start, scheduled_end, departure_delay, arrival_delay):
-    """(arrival, departure, whether they're realtime times), or (None, None, False) if the stop has no time.
-    A stop with only one of the two gets it for both."""
-    def has(key):
-        return bool(str(stop.get(key) or "").strip())
+def has_time(stop, key):
+    return bool(str(stop.get(key) or "").strip())
 
-    # Realtime stop times already include the delay, so they're used as they are.
-    if has("arr_rt") or has("dep_rt"):
-        arrival = parse_utc_timestamp(stop["arr_rt" if has("arr_rt") else "dep_rt"], "arr_rt")
-        departure = parse_utc_timestamp(stop["dep_rt"], "dep_rt") if has("dep_rt") else arrival
-        return arrival, departure, True
+
+def time_at_stop(stop, scheduled_start, scheduled_end, departure_delay, arrival_delay, trip_has_realtime):
+    """(arrival, departure, whether that's what really happened), or (None, None, False) if the stop has
+    no time. A stop with only one of the two gets it for both.
+
+    trainlog stores a realtime time only where it differs from the schedule, for arrival and departure
+    separately. So in a trip with realtime times, a stop's scheduled time is what happened wherever it has
+    no realtime one (the train was on time there). Only in a trip without any realtime times are the
+    trip's delays spread over its scheduled stop times."""
+    def has(key):
+        return has_time(stop, key)
+
+    if trip_has_realtime:
+        arrival_key = next((key for key in ("arr_rt", "arr") if has(key)), None)
+        departure_key = next((key for key in ("dep_rt", "dep") if has(key)), None)
+        if arrival_key is None and departure_key is None:
+            return None, None, False
+        arrival = parse_utc_timestamp(stop[arrival_key or departure_key], arrival_key or departure_key)
+        departure = parse_utc_timestamp(stop[departure_key], departure_key) if departure_key else arrival
+        return arrival, max(arrival, departure), True
 
     # Scheduled stop times get the delay, interpolated between departure and arrival delay.
     def with_delay(key):
