@@ -256,7 +256,8 @@ def trip_fingerprint(row):
         if fixes:
             relevant["phone_anchor_settings"] = [phone_anchors.MAX_ACCURACY_METERS,
                                                  phone_anchors.MAX_DISTANCE_FROM_ROUTE_METERS,
-                                                 phone_anchors.MIN_DEVIATION_SECONDS]
+                                                 phone_anchors.MIN_DEVIATION_SECONDS,
+                                                 phone_anchors.INACCURATE_MAX_TIME_OFF_SECONDS]
     return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()[:16]
 
 

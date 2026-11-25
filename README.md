@@ -60,15 +60,18 @@ stop times. Where a stop's departure is in a later minute than its arrival, the 
 arrival to departure.
 In between, time is spread evenly over the route. That's wrong when the ride wasn't steady: a train that
 stood still between two stations, a car in a traffic jam. The phone's points show what really happened,
-even though the line it draws between them is bad. So the accurate ones (app points with an accuracy of
-30 m or better, not the Shortcut's) recorded during a trip are kept in the database before they're
-deleted, and some become **exact anchors**: the second at which the ride was at a place on the route
-(`phone_anchors.py`). The converter keeps an anchor's time to the second, and the ride's points follow it.
+even though the line it draws between them is bad. So the app's points (not the Shortcut's) recorded during
+a trip are kept in the database before they're deleted, and some become **exact anchors**: the second at
+which the ride was at a place on the route (`phone_anchors.py`). The converter keeps an anchor's time to the second, and the ride's points follow it.
 
 Which points become anchors, each time the trip is converted:
 
 - Only those within 50 m of the route. Where the route passes a place twice, the pass closer to where
   the ride should be at that time counts.
+- Only those with an accuracy of 30 m or better, or else at most 15 minutes before or after trainlog's
+  times have the ride there. In trains, phones often report an accuracy of kilometers for points right on
+  the tracks; a point really that far off that happens to lie on the route is mostly far from where the
+  ride was at that time.
 - Not those recorded while waiting at a stop (within 150 m of it, between its arrival and departure):
   trainlog's times already cover that.
 - In route order, at plausible speeds: points that would mean going back along the route, or faster

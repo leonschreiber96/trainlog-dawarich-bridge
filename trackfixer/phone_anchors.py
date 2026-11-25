@@ -10,10 +10,13 @@ of them become exact anchors: the second at which the ride was at a place on the
 
 Which fixes become anchors (assess_phone_fixes), from the stored fixes each time the trip
 is converted, so editing a drawn route, or more fixes arriving late, chooses again:
-* App points only (the Shortcut's have no accuracy and may be old), with an accuracy of
-  PHONE_ANCHOR_MAX_ACCURACY_METERS or better, inside the trip's time, within
+* App points only (the Shortcut's have no accuracy and may be old), inside the trip's time, within
   PHONE_ANCHOR_MAX_DISTANCE_FROM_ROUTE_METERS of the route. Where the route passes a place
   twice, the pass closer to where the ride should be at that time counts.
+* With an accuracy of PHONE_ANCHOR_MAX_ACCURACY_METERS or better, or, as phones in trains often
+  report kilometers for points right on the tracks, at most PHONE_ANCHOR_INACCURATE_MAX_MINUTES_OFF
+  before or after the trip's own times have the ride there (a point really that far off that
+  happens to lie on the route is mostly far from that).
 * Not while waiting at a stop: a fix near a stop (STATION_RADIUS_METERS, platforms are long)
   between its arrival and departure in trainlog adds nothing, and GPS noise can put it
   just before the stop, which would look like a contradiction.
@@ -35,6 +38,11 @@ from .phone_points import STATION_RADIUS_METERS, is_trip_point
 MAX_ACCURACY_METERS = tuning_number("PHONE_ANCHOR_MAX_ACCURACY_METERS", 30)
 MAX_DISTANCE_FROM_ROUTE_METERS = tuning_number("PHONE_ANCHOR_MAX_DISTANCE_FROM_ROUTE_METERS", 50)
 MIN_DEVIATION_SECONDS = tuning_number("PHONE_ANCHOR_MIN_DEVIATION_SECONDS", 60)
+# A fix the phone reports as less accurate than MAX_ACCURACY_METERS still counts if it's on the route (within
+# MAX_DISTANCE_FROM_ROUTE_METERS) at most this long before or after the trip's own times (start, end, stops)
+# have the ride there. Phones in trains often report kilometers for points right on the tracks. One that
+# really is that far off and happens to lie on the route is mostly far from where the ride was at that time.
+INACCURATE_MAX_TIME_OFF_SECONDS = tuning_number("PHONE_ANCHOR_INACCURATE_MAX_MINUTES_OFF", 15) * 60
 
 # Faster than this between two fixes (along the route) is implausible, so one of them is wrong.
 # Trips faster on average than this are allowed 1.5 times their average speed.
@@ -69,18 +77,18 @@ class Candidate(NamedTuple):
 
 
 def fixes_from_points(points, start_timestamp, end_timestamp):
-    """The phone fixes among Dawarich points: accurate app points inside the trip's time."""
+    """The phone fixes among Dawarich points: app points inside the trip's time, however accurate the phone
+    says they are (assess_phone_fixes decides), including those Dawarich flagged as GPS noise for that."""
     fixes = []
     for point in points:
         accuracy = point.get("accuracy")
-        if (is_trip_point(point) or point.get("anomaly") or accuracy is None
-                or not start_timestamp < point["timestamp"] < end_timestamp):
+        if is_trip_point(point) or accuracy is None or not start_timestamp < point["timestamp"] < end_timestamp:
             continue
         try:
             accuracy = float(accuracy)
         except (TypeError, ValueError):
             continue
-        if 0 <= accuracy <= MAX_ACCURACY_METERS:
+        if 0 <= accuracy:
             fixes.append({"timestamp": int(point["timestamp"]), "latitude": float(point["latitude"]),
                           "longitude": float(point["longitude"]), "accuracy": accuracy})
     return fixes
@@ -109,17 +117,21 @@ def assess_phone_fixes(row, fixes):
     candidates = []
     for fix in sorted(fixes, key=lambda fix: fix["timestamp"]):
         timestamp = int(fix["timestamp"])
-        if (timestamp in ignored or fix.get("accuracy") is None or fix["accuracy"] > MAX_ACCURACY_METERS
-                or not basis.start < timestamp < basis.end):
+        if timestamp in ignored or fix.get("accuracy") is None or not basis.start < timestamp < basis.end:
             continue
         meters = route_index.meters_along(
             [float(fix["longitude"]), float(fix["latitude"])], meters_at(times_without_fixes, timestamp))
         if meters is None:
             continue
-        if waiting_at_a_stop(basis, timestamp, meters, float(fix["accuracy"])):
+        accuracy = float(fix["accuracy"])
+        if accuracy > MAX_ACCURACY_METERS:
+            if abs(time_at(times_without_fixes, meters) - timestamp) > INACCURATE_MAX_TIME_OFF_SECONDS:
+                continue
+            accuracy = MAX_DISTANCE_FROM_ROUTE_METERS  # as far as it's trusted, for the checks below
+        if waiting_at_a_stop(basis, timestamp, meters, accuracy):
             statuses[timestamp] = AT_A_STOP
             continue
-        candidates.append(Candidate(timestamp, meters, float(fix["accuracy"])))
+        candidates.append(Candidate(timestamp, meters, accuracy))
     if len(candidates) > MAX_FIXES_PER_TRIP:
         step = math.ceil(len(candidates) / MAX_FIXES_PER_TRIP)
         candidates = candidates[::step]

@@ -125,12 +125,33 @@ class PhoneAnchorTest(unittest.TestCase):
         fixes = fixes_of_the_ride()
         old_position = fix(START + 16 * 60 + 10, position_along(ROAD_CORNERS, 2_000))  # 18 km back, a minute later
         off_the_road = fix(START + 16 * 60 + 20, (2_000, 15_000))
-        inaccurate = fix(START + 16 * 60 + 40, position_along(ROAD_CORNERS, 20_200), accuracy=200)
-        _, statuses = assess_phone_fixes(car_row(), fixes + [old_position, off_the_road, inaccurate])
+        _, statuses = assess_phone_fixes(car_row(), fixes + [old_position, off_the_road])
 
-        for unusable in (old_position, off_the_road, inaccurate):
+        for unusable in (old_position, off_the_road):
             self.assertEqual(statuses[unusable["timestamp"]], UNUSABLE)
         self.assertIn(USED, statuses.values())
+
+    def test_points_the_phone_calls_inaccurate_time_the_ride_if_they_are_on_the_route(self):
+        # Phones in trains often report kilometers of accuracy for points right on the tracks.
+        row = car_row()
+        fixes = [dict(fix, accuracy=2000) for fix in fixes_of_the_ride()]
+        anchors = choose_exact_anchors(row, fixes)
+        route, _ = convert_trip(row, 2, anchors)
+
+        self.assertTrue(anchors)
+        for meters in range(1_000, 30_000, 1_000):
+            with self.subTest(meters=meters):
+                self.assertLess(abs(seconds_late(route, meters)), 65)
+
+    def test_an_inaccurate_point_on_the_route_far_off_the_trips_times_is_not_used(self):
+        # On the road, but where the evenly timed ride is 23 minutes later: a position off by kilometers
+        # that happens to lie on the route. As accurate as the phone says, it would count.
+        timestamp = START + 17 * 60
+        position = position_along(ROAD_CORNERS, 30_000)
+        _, statuses = assess_phone_fixes(car_row(), [fix(timestamp, position, accuracy=2000)])
+        self.assertEqual(statuses[timestamp], UNUSABLE)
+        _, statuses = assess_phone_fixes(car_row(), [fix(timestamp, position, accuracy=10)])
+        self.assertNotEqual(statuses[timestamp], UNUSABLE)
 
     def test_fixes_left_out_on_the_map_are_not_used(self):
         fixes = fixes_of_the_ride()
@@ -181,7 +202,7 @@ class PhoneAnchorTest(unittest.TestCase):
         _, statuses = assess_phone_fixes(row_without_waiting, [waiting])
         self.assertEqual(statuses[waiting["timestamp"]], CONTRADICTS_STOP)
 
-    def test_only_accurate_app_points_during_the_trip_become_phone_fixes(self):
+    def test_app_points_during_the_trip_become_phone_fixes_however_accurate(self):
         def point(timestamp, **properties):
             latitude, longitude = meters_to_latitude_longitude((0, 100))
             return dict({"timestamp": timestamp, "latitude": str(latitude), "longitude": str(longitude),
@@ -190,12 +211,13 @@ class PhoneAnchorTest(unittest.TestCase):
         points = [
             point(START + 60),
             point(START + 120, accuracy=None, battery=80),  # the Shortcut
-            point(START + 180, accuracy=31),
-            point(START + 240, anomaly=True),
+            point(START + 180, accuracy=2000),
+            point(START + 240, anomaly=True),  # Dawarich flags inaccurate points as GPS noise
             point(START + 300, tracker_id="trainlog-99"),  # another trip
             point(START - 60),  # before the trip
         ]
-        self.assertEqual([fix["timestamp"] for fix in fixes_from_points(points, START, END)], [START + 60])
+        self.assertEqual([fix["timestamp"] for fix in fixes_from_points(points, START, END)],
+                         [START + 60, START + 180, START + 240])
 
 
 if __name__ == "__main__":
