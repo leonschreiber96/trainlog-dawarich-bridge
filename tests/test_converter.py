@@ -52,6 +52,25 @@ def time_at(route, station):
     return nearest["timestamp"]
 
 
+def waiting_at_hauptbahnhof(row, departure="2026-11-12 09:00:00"):
+    """The row with the S-Bahn leaving Hauptbahnhof only at `departure` (it arrived at 08:57)."""
+    waypoints = json.loads(row["waypoints"])
+    waypoints[0]["stop"]["dep_rt"] = departure
+    return dict(row, waypoints=json.dumps(waypoints))
+
+
+def position_at(row, meters):
+    """[longitude, latitude] some meters along the trip's route."""
+    route = decode_path(row["path"])
+    for a, b in zip(route, route[1:]):
+        length = distance_meters(a, b)
+        if meters <= length:
+            share = meters / length
+            return [a[0] + share * (b[0] - a[0]), a[1] + share * (b[1] - a[1])]
+        meters -= length
+    return route[-1]
+
+
 def meters_before(station, row, meters_earlier=0):
     """Meters along the trip's route to a station (or some meters before it)."""
     route = decode_path(row["path"])
@@ -95,6 +114,18 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(route[-1]["timestamp"], utc("2026-11-12 09:02:00"))
         self.assertEqual(warnings, [])
 
+
+    def test_the_train_waits_at_a_stop_from_arrival_to_departure(self):
+        row = waiting_at_hauptbahnhof(s_bahn_trip_row(tiergarten_time="2026-11-12 09:05:00"))
+        route, warnings = convert_trip(row)
+
+        at_hauptbahnhof = [point["timestamp"] for point in route
+                           if distance_meters([point["longitude"], point["latitude"]], STATIONS["Hauptbahnhof"]) < 30]
+        self.assertEqual(len(at_hauptbahnhof), 2)
+        arrival, departure = at_hauptbahnhof
+        self.assertTrue(utc("2026-11-12 08:57:00") <= arrival <= utc("2026-11-12 08:57:59"))
+        self.assertTrue(utc("2026-11-12 09:00:00") <= departure <= utc("2026-11-12 09:00:59"))
+        self.assertFalse([warning for warning in warnings if "Inconsistent" in warning])
 
     def test_without_exact_anchors_nothing_changes(self):
         self.assertEqual(convert_trip(s_bahn_trip_row()), convert_trip(s_bahn_trip_row(), exact_anchors=[]))

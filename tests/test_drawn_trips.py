@@ -129,11 +129,11 @@ class DrawnTripSyncTest(unittest.TestCase):
         sync_drawn_trips(self.dawarich, new_run_log())
         self.assertEqual(database.get_trip("drawn-1")["sent_point_count"], len(drawn_points(self.dawarich)))
 
-    def test_trips_without_phone_fixes_keep_their_fingerprint(self):
-        # As before phone fixes existed, so such trips weren't sent again after the update.
+    def test_leaving_no_phone_points_out_changes_nothing(self):
         row, _ = trip_from_form(walk_form(ignored_phone_fixes="[]"))
         self.assertNotIn("ignored_phone_fixes", row)
-        self.assertEqual(trip_fingerprint(dict(row, uid="drawn-1")), "00434dea6eb7e2a6")
+        self.assertEqual(trip_fingerprint(dict(row, uid="drawn-1")),
+                         trip_fingerprint(dict(trip_from_form(walk_form())[0], uid="drawn-1")))
 
     def test_is_timed_by_the_phone_points_of_the_walk(self):
         # The app's first point of the walk, 100 m from home at 12:08:40: evenly spread over the

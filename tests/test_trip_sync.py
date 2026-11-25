@@ -282,9 +282,13 @@ class PhoneAnchorSyncTest(unittest.TestCase):
                          [point["timestamp"] for point in expected_route])
         self.assertIsNone(database.get_trip("1234")["sent_anchors"])
 
-    def test_trips_without_phone_fixes_keep_their_fingerprint(self):
-        # As before phone fixes existed, so such trips weren't sent again after the update.
-        self.assertEqual(trip_fingerprint(example_bus_trip_row()), "a96bdaa690ab6140")
+    def test_only_a_trips_own_phone_fixes_change_its_fingerprint(self):
+        fingerprint = trip_fingerprint(example_bus_trip_row())
+        fix = {"timestamp": berlin_timestamp("12:20:00"), "latitude": 50.0, "longitude": 10.0, "accuracy": 8}
+        database.add_phone_fixes("another-trip", [fix])
+        self.assertEqual(trip_fingerprint(example_bus_trip_row()), fingerprint)
+        database.add_phone_fixes("1234", [fix])
+        self.assertNotEqual(trip_fingerprint(example_bus_trip_row()), fingerprint)
 
     def test_phone_points_that_reach_dawarich_late_time_the_trip_again(self):
         dawarich = FakeDawarich()

@@ -7,12 +7,15 @@ How the timestamps are made:
   utc_end_datetime + arrival_delay (delays are in seconds).
 * Stops along the way (trainlog "waypoints") with a known time become extra time
   anchors. Realtime stop times are used as they are; scheduled stop times get the
-  delay, interpolated between the departure and arrival delay.
+  delay, interpolated between the departure and arrival delay. Where a stop's departure
+  is in a later minute than its arrival, the ride waits there: the stop's vertex is
+  doubled, with the arrival time on the first and the departure time on the second.
 * trainlog times are only minute-precise, so an anchor may move forward by up to
   59 seconds to keep all anchor times strictly increasing.
 * Two stops can even share a minute. So a section between two anchors may not be
-  faster than twice the trip's average speed; if the minute windows don't allow that,
-  the fastest section is made as slow as they allow.
+  faster than twice the trip's average speed while moving (waiting at stops not
+  counted); if the minute windows don't allow that, the fastest section is made as slow
+  as they allow.
 * Exact anchors (see phone_anchors.py: where a phone point with good accuracy shows the
   ride was at what second) get a vertex of their own on the route and keep their time to
   the second. The speed limit above doesn't apply next to them: a ride that stood still
@@ -66,13 +69,30 @@ class Anchor(NamedTuple):
         return 0 if self.kind == EXACT else ANCHOR_TIME_WINDOW_SECONDS
 
 
+class Stay(NamedTuple):
+    """A stop with a time in trainlog: when the ride arrived there and when it left (minute-precise)."""
+    index: int  # the route vertex of its arrival
+    arrival: float
+    departure: float  # the same as arrival, unless the ride left in a later minute
+    realtime: bool
+
+
 class TripBasis(NamedTuple):
     """What a trip's timing is made from."""
-    route: list  # [longitude, latitude] vertices
+    route: list  # [longitude, latitude] vertices; a stop's vertex is doubled where the ride waited there
     distance_along_route: list  # meters from the start to each vertex
     start: float  # delay-adjusted, as a timestamp
     end: float
-    stops: list  # Anchors of the stops with a time, in route order
+    stops: list  # Anchors of the stops' arrivals and departures, in route order
+    stays: list  # the stops as Stays, in route order
+
+    @property
+    def moving_seconds(self):
+        """How long the ride was moving: its duration without the waiting at stops
+        (at least a quarter of it, in case trainlog's stop times are off)."""
+        duration = self.end - self.start
+        waiting = sum(stay.departure - stay.arrival for stay in self.stays)
+        return max(duration - waiting, duration / 4)
 
 
 def convert_trip(row, simplify_tolerance_meters=SIMPLIFY_TOLERANCE_METERS, exact_anchors=()):
@@ -109,8 +129,30 @@ def trip_basis(row, warnings):
     if actual_end <= actual_start:
         raise ValueError("Delay-adjusted end is not after start; check the delays")
 
-    stops = stop_anchors(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings)
-    return TripBasis(route, distances_along(route), actual_start, actual_end, stops)
+    stays = stays_at_stops(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings)
+    route, stops, stays = wait_at_stops(route, stays)
+    return TripBasis(route, distances_along(route), actual_start, actual_end, stops, stays)
+
+
+def wait_at_stops(route, stays):
+    """(route, stop anchors, stays) with each stop's vertex doubled where the ride waited there,
+    so it can stand still from the arrival on the first to the departure on the second."""
+    stay_at_vertex = {stay.index: stay for stay in stays}
+    new_route, anchors, new_stays = [], [], []
+    for index, vertex in enumerate(route):
+        new_route.append(vertex)
+        stay = stay_at_vertex.get(index)
+        if stay is None:
+            continue
+        arrival_index = len(new_route) - 1
+        anchors.append(Anchor(arrival_index, stay.arrival, STOP, stay.realtime))
+        if stay.departure >= stay.arrival + 60:
+            new_route.append(list(vertex))
+            anchors.append(Anchor(len(new_route) - 1, stay.departure, STOP, stay.realtime))
+        else:
+            stay = stay._replace(departure=stay.arrival)
+        new_stays.append(stay._replace(index=arrival_index))
+    return new_route, anchors, new_stays
 
 
 def trip_time_range(row):
@@ -146,7 +188,7 @@ def timed_route(row, warnings, exact_anchors=()):
     # An anchor is the time the train was at a route vertex.
     anchors = [start] + sorted(stops + exact, key=lambda anchor: anchor.index) + [end]
 
-    average_speed = distance_along_route[-1] / (basis.end - basis.start)
+    average_speed = distance_along_route[-1] / basis.moving_seconds
     anchor_times = fit_anchor_times(anchors, distance_along_route, average_speed)
     if anchor_times is None and exact:
         warnings.append("Inconsistent waypoint timing; using the phone's points and the trip endpoints only")
@@ -273,9 +315,9 @@ def parse_waypoints(value):
 # --- Timing -------------------------------------------------------------------------
 
 
-def stop_anchors(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings):
-    """Time anchors from the stops along the trip, in route order."""
-    anchors = []
+def stays_at_stops(row, route, scheduled_start, scheduled_end, departure_delay, arrival_delay, warnings):
+    """The stops along the trip with a time, as Stays at their nearest route vertex, in route order."""
+    stays = []
     previous_index = 0
     for waypoint in parse_waypoints(row.get("waypoints")):
         if not isinstance(waypoint, dict):
@@ -284,10 +326,11 @@ def stop_anchors(row, route, scheduled_start, scheduled_end, departure_delay, ar
         if not isinstance(stop, dict):
             raise ValueError("Waypoint stop must be an object")
 
-        stop_time, is_realtime = time_at_stop(stop, scheduled_start, scheduled_end, departure_delay, arrival_delay)
+        arrival, departure, is_realtime = time_at_stop(
+            stop, scheduled_start, scheduled_end, departure_delay, arrival_delay)
         latitude = waypoint.get("lat", stop.get("lat"))
         longitude = waypoint.get("lng", stop.get("lng"))
-        if stop_time is None or latitude is None or longitude is None:
+        if arrival is None or latitude is None or longitude is None:
             continue
 
         stop_position = [float(longitude), float(latitude)]
@@ -304,25 +347,34 @@ def stop_anchors(row, route, scheduled_start, scheduled_end, departure_delay, ar
             warnings.append("Waypoint ignored: same route vertex as previous anchor or trip endpoint")
             continue
 
-        anchors.append(Anchor(nearest_index, stop_time, STOP, is_realtime))
+        stays.append(Stay(nearest_index, arrival, departure, is_realtime))
         previous_index = nearest_index
-    return anchors
+    return stays
 
 
 def time_at_stop(stop, scheduled_start, scheduled_end, departure_delay, arrival_delay):
-    """(time, whether it's a realtime time), or (None, False) if the stop has no time."""
-    # A realtime stop time already includes the delay, so it is used as it is.
-    for key in ("arr_rt", "dep_rt"):
-        if str(stop.get(key) or "").strip():
-            return parse_utc_timestamp(stop[key], key), True
+    """(arrival, departure, whether they're realtime times), or (None, None, False) if the stop has no time.
+    A stop with only one of the two gets it for both."""
+    def has(key):
+        return bool(str(stop.get(key) or "").strip())
 
-    # A scheduled stop time gets the delay, interpolated between departure and arrival delay.
-    for key in ("arr", "dep"):
-        if str(stop.get(key) or "").strip():
-            scheduled_time = parse_utc_timestamp(stop[key], key)
-            progress = max(0, min(1, (scheduled_time - scheduled_start) / (scheduled_end - scheduled_start)))
-            return scheduled_time + departure_delay + progress * (arrival_delay - departure_delay), False
-    return None, False
+    # Realtime stop times already include the delay, so they're used as they are.
+    if has("arr_rt") or has("dep_rt"):
+        arrival = parse_utc_timestamp(stop["arr_rt" if has("arr_rt") else "dep_rt"], "arr_rt")
+        departure = parse_utc_timestamp(stop["dep_rt"], "dep_rt") if has("dep_rt") else arrival
+        return arrival, departure, True
+
+    # Scheduled stop times get the delay, interpolated between departure and arrival delay.
+    def with_delay(key):
+        scheduled_time = parse_utc_timestamp(stop[key], key)
+        progress = max(0, min(1, (scheduled_time - scheduled_start) / (scheduled_end - scheduled_start)))
+        return scheduled_time + departure_delay + progress * (arrival_delay - departure_delay)
+
+    if has("arr") or has("dep"):
+        arrival = with_delay("arr" if has("arr") else "dep")
+        departure = with_delay("dep") if has("dep") else arrival
+        return arrival, departure, False
+    return None, None, False
 
 
 def fit_anchor_times(anchors, distance_along_route, average_speed):

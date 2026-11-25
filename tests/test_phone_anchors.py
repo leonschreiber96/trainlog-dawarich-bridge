@@ -3,10 +3,11 @@ import unittest
 from datetime import datetime, timezone
 
 from trackfixer.converter import convert_trip, distance_meters
-from trackfixer.phone_anchors import (IGNORED, NOT_NEEDED, UNUSABLE, USED, assess_phone_fixes,
-                                      choose_exact_anchors, fixes_from_points)
+from trackfixer.phone_anchors import (AT_A_STOP, CONTRADICTS_STOP, IGNORED, NOT_NEEDED, UNUSABLE, USED,
+                                      assess_phone_fixes, choose_exact_anchors, fixes_from_points)
 
 from .helpers import APP_TRACKER_ID, encode_path, meters_to_latitude_longitude
+from .test_converter import meters_before, position_at, s_bahn_trip_row, utc, waiting_at_hauptbahnhof
 
 # A car ride with a traffic jam, modelled on a real one (made-up place and times, UTC):
 #   13:00-13:15  20 km at 80 km/h
@@ -161,6 +162,24 @@ class PhoneAnchorTest(unittest.TestCase):
                                       key=lambda point: distance_meters([point["longitude"], point["latitude"]],
                                                                         longitude_latitude(halfway_back)))
         self.assertLess(abs(nearest_on_the_way_back["timestamp"] - (START + 75 * 60)), 90)
+
+    def test_a_point_recorded_while_waiting_at_a_stop_is_not_a_contradiction(self):
+        # Like a tram waiting 3 minutes at a stop: just before it left, the phone put it 20 m
+        # before the stop's spot on the route (GPS noise, or a long platform).
+        row = waiting_at_hauptbahnhof(s_bahn_trip_row(tiergarten_time="2026-11-12 09:05:00"))
+        longitude, latitude = position_at(row, meters_before("Hauptbahnhof", row, 20))
+        waiting = {"timestamp": int(utc("2026-11-12 09:00:27")), "latitude": latitude, "longitude": longitude,
+                   "accuracy": 14}
+        anchors, statuses = assess_phone_fixes(row, [waiting])
+
+        self.assertEqual(statuses[waiting["timestamp"]], AT_A_STOP)
+        self.assertEqual(anchors, [])
+
+        # Without the departure time in trainlog, it's still the arrival's minute that counts:
+        # 3 minutes later, the train should have been well past the stop.
+        row_without_waiting = s_bahn_trip_row(tiergarten_time="2026-11-12 09:05:00")
+        _, statuses = assess_phone_fixes(row_without_waiting, [waiting])
+        self.assertEqual(statuses[waiting["timestamp"]], CONTRADICTS_STOP)
 
     def test_only_accurate_app_points_during_the_trip_become_phone_fixes(self):
         def point(timestamp, **properties):

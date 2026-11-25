@@ -14,6 +14,9 @@ is converted, so editing a drawn route, or more fixes arriving late, chooses aga
   PHONE_ANCHOR_MAX_ACCURACY_METERS or better, inside the trip's time, within
   PHONE_ANCHOR_MAX_DISTANCE_FROM_ROUTE_METERS of the route. Where the route passes a place
   twice, the pass closer to where the ride should be at that time counts.
+* Not while waiting at a stop: a fix near a stop (STATION_RADIUS_METERS, platforms are long)
+  between its arrival and departure in trainlog adds nothing, and GPS noise can put it
+  just before the stop, which would look like a contradiction.
 * In route order, at plausible speeds: the largest set of fixes that never goes back along
   the route (more than GPS noise) or needs more than a top speed for the kind of trip.
 * Only fixes that change something: the one farthest off the times the trip would get
@@ -25,8 +28,9 @@ import math
 from typing import NamedTuple
 
 from .config import tuning_number
-from .converter import ENDPOINT, Anchor, combine_anchors, insert_exact_anchor_vertices, likely_time, trip_basis
-from .phone_points import is_trip_point
+from .converter import (ANCHOR_TIME_WINDOW_SECONDS, ENDPOINT, Anchor, combine_anchors, insert_exact_anchor_vertices,
+                        likely_time, trip_basis)
+from .phone_points import STATION_RADIUS_METERS, is_trip_point
 
 MAX_ACCURACY_METERS = tuning_number("PHONE_ANCHOR_MAX_ACCURACY_METERS", 30)
 MAX_DISTANCE_FROM_ROUTE_METERS = tuning_number("PHONE_ANCHOR_MAX_DISTANCE_FROM_ROUTE_METERS", 50)
@@ -54,6 +58,7 @@ USED = "used"  # it's an anchor
 NOT_NEEDED = "not needed"  # plausible, but the trip's times were within MIN_DEVIATION_SECONDS of it anyway
 IGNORED = "ignored"  # not to be used, chosen on the drawn trip's map
 UNUSABLE = "unusable"  # not accurate enough, outside the trip's time, off the route, or implausible
+AT_A_STOP = "at a stop"  # recorded while waiting at a stop, which trainlog's times already cover
 CONTRADICTS_STOP = "contradicts a realtime stop time"
 
 
@@ -109,8 +114,12 @@ def assess_phone_fixes(row, fixes):
             continue
         meters = route_index.meters_along(
             [float(fix["longitude"]), float(fix["latitude"])], meters_at(times_without_fixes, timestamp))
-        if meters is not None:
-            candidates.append(Candidate(timestamp, meters, float(fix["accuracy"])))
+        if meters is None:
+            continue
+        if waiting_at_a_stop(basis, timestamp, meters, float(fix["accuracy"])):
+            statuses[timestamp] = AT_A_STOP
+            continue
+        candidates.append(Candidate(timestamp, meters, float(fix["accuracy"])))
     if len(candidates) > MAX_FIXES_PER_TRIP:
         step = math.ceil(len(candidates) / MAX_FIXES_PER_TRIP)
         candidates = candidates[::step]
@@ -153,6 +162,15 @@ def assess_phone_fixes(row, fixes):
     for candidate in selected:
         statuses[candidate.timestamp] = USED
     return [[candidate.timestamp, round(candidate.meters, 1)] for candidate in selected], statuses
+
+
+def waiting_at_a_stop(basis, timestamp, meters, accuracy):
+    """Was the fix recorded near a stop between the ride's arrival and departure there?"""
+    return any(
+        abs(meters - basis.distance_along_route[stay.index]) <= STATION_RADIUS_METERS + accuracy
+        and stay.arrival <= timestamp <= stay.departure + ANCHOR_TIME_WINDOW_SECONDS
+        for stay in basis.stays
+    )
 
 
 def timeline(start, end, stops, exact, distance_along_route):
@@ -249,20 +267,28 @@ class RouteIndex:
         return math.floor(degrees / self.CELL_DEGREES)
 
     def meters_along(self, position, expected_meters):
-        """Meters along the route of the place closest to `position`, among the passes within
-        MAX_DISTANCE_FROM_ROUTE_METERS of it the one closest to `expected_meters`. None if it's farther away."""
-        segments = self.cells.get((self.cell(position[0]), self.cell(position[1])), []) + self.long_segments
-        best = None
-        for index in segments:
+        """Meters along the route of the place closest to `position`, or None if that's more than
+        MAX_DISTANCE_FROM_ROUTE_METERS away. Where the route passes the place more than once (there and
+        back on the same road), the pass closest to `expected_meters` counts. Segments next to each
+        other along the route are one pass (at a corner, both are near a position)."""
+        near = []  # (meters at the segment's start, at its end, distance, meters of the closest place)
+        for index in self.cells.get((self.cell(position[0]), self.cell(position[1])), []) + self.long_segments:
             distance, share = project_on_segment(position, self.route[index], self.route[index + 1])
-            if distance > MAX_DISTANCE_FROM_ROUTE_METERS:
-                continue
-            start, end = self.distance_along_route[index], self.distance_along_route[index + 1]
-            meters = start + share * (end - start)
-            key = (abs(meters - expected_meters), distance)
-            if best is None or key < best[0]:
-                best = (key, meters)
-        return best[1] if best else None
+            if distance <= MAX_DISTANCE_FROM_ROUTE_METERS:
+                start, end = self.distance_along_route[index], self.distance_along_route[index + 1]
+                near.append((start, end, distance, start + share * (end - start)))
+        if not near:
+            return None
+
+        passes = []  # the closest place of each pass: (distance, meters)
+        pass_end = None
+        for start, end, distance, meters in sorted(near):
+            if pass_end is None or start > pass_end + 2 * MAX_DISTANCE_FROM_ROUTE_METERS:
+                passes.append((distance, meters))
+            else:
+                passes[-1] = min(passes[-1], (distance, meters))
+            pass_end = end if pass_end is None else max(pass_end, end)
+        return min(passes, key=lambda closest: (abs(closest[1] - expected_meters), closest[0]))[1]
 
 
 def project_on_segment(position, segment_start, segment_end):

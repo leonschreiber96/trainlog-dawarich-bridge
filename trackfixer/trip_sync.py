@@ -50,9 +50,9 @@ FINGERPRINT_COLUMNS = (
 DRAWN_TRIP_SIMPLIFY_TOLERANCE_METERS = tuning_number("DRAWN_TRIP_ROUTE_TOLERANCE_METERS", 2)
 
 # Increase this after changing converter.py, so all trips get converted and sent again.
-CONVERTER_VERSION = 2
+CONVERTER_VERSION = 3
 # Increase this after changing how phone_anchors.py chooses anchors: trips with phone fixes are sent again.
-PHONE_ANCHOR_VERSION = 1
+PHONE_ANCHOR_VERSION = 2
 
 # More trips than this missing from one export at once looks like an incomplete download.
 MAX_TRIPS_REMOVED_PER_RUN = tuning_number("MAX_TRIPS_REMOVED_PER_RUN", 10)

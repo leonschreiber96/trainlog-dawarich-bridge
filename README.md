@@ -52,8 +52,9 @@ in the backups).
 
 ## Timing trips with the phone's points
 
-A trip's times are only known where it starts and ends, and at stops with a time in trainlog. In
-between, time is spread evenly over the route. That's wrong when the ride wasn't steady: a train that
+A trip's times are only known where it starts and ends, and at stops with a time in trainlog. Where a
+stop's departure is in a later minute than its arrival, the ride waits there from arrival to departure.
+In between, time is spread evenly over the route. That's wrong when the ride wasn't steady: a train that
 stood still between two stations, a car in a traffic jam. The phone's points show what really happened,
 even though the line it draws between them is bad. So the accurate ones (app points with an accuracy of
 30 m or better, not the Shortcut's) recorded during a trip are kept in the database before they're
@@ -64,6 +65,8 @@ Which points become anchors, each time the trip is converted:
 
 - Only those within 50 m of the route. Where the route passes a place twice, the pass closer to where
   the ride should be at that time counts.
+- Not those recorded while waiting at a stop (within 150 m of it, between its arrival and departure):
+  trainlog's times already cover that.
 - In route order, at plausible speeds: points that would mean going back along the route, or faster
   than a top speed for the kind of trip, are left out (e.g. a stale position).
 - Only where they change something: as long as a point is over 60 s off the times the trip has
@@ -76,8 +79,7 @@ Which points become anchors, each time the trip is converted:
 The points are taken right before a trip is sent, while they're still in Dawarich. Points that reach
 Dawarich later (the phone was offline) are added by the next runs, for 48 hours after sending. If they
 change the anchors, the trip is sent again, which loses a transport mode corrected in Dawarich
-meanwhile; so not later than that. Trips without such points, including all trips sent before this
-existed, are not sent again. A trip's notes say how many points time it. Planes get no anchors.
+meanwhile; so not later than that. A trip's notes say how many points time it. Planes get no anchors.
 
 ## What a run does
 
