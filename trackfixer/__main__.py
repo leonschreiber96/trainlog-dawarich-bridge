@@ -3,9 +3,10 @@
     python -m trackfixer          web UI + nightly runs (what the Docker container does)
     python -m trackfixer run      a single run right now, without the web UI
 
-One-off repair (see shortcut_tracker_ids.py):
+One-off repairs (see shortcut_tracker_ids.py and backed_up_phone_fixes.py):
 
     python -m trackfixer fix-shortcut-tracker-ids --tracker-id <app's id> --since 2025-01-01 [--apply]
+    python -m trackfixer phone-fixes-from-backups [--apply]
 """
 
 import argparse
@@ -15,6 +16,7 @@ from datetime import datetime
 import waitress
 
 from . import database, runner, scheduler, web
+from .backed_up_phone_fixes import phone_fixes_from_backups
 from .config import load_settings
 from .dawarich import DawarichClient
 from .shortcut_tracker_ids import fix_shortcut_tracker_ids
@@ -31,6 +33,10 @@ def main():
     fix_command.add_argument("--since", required=True, type=datetime.fromisoformat,
                              help="first day to look at, e.g. 2025-01-01")
     fix_command.add_argument("--apply", action="store_true", help="really change the points (default: dry run)")
+    backups_command = commands.add_parser(
+        "phone-fixes-from-backups", help="keep the phone points in deleted-points/ as phone fixes of their trips"
+    )
+    backups_command.add_argument("--apply", action="store_true", help="really keep them (default: dry run)")
     arguments = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,6 +48,9 @@ def main():
         return
 
     database.init_database(settings.database_file)
+    if arguments.command == "phone-fixes-from-backups":
+        phone_fixes_from_backups(settings, arguments.apply)
+        return
     if arguments.command == "run":
         runner.run(settings, runner.MANUAL)
         return

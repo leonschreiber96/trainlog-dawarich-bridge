@@ -172,6 +172,19 @@ docker compose exec dawarich-track-fixer python -m trackfixer fix-shortcut-track
 # (that deletes the manual transport mode corrections of the years it rebuilds)
 ```
 
+### Timing old trips with their phone points (once)
+
+Phone points the phone reports as inaccurate only time trips since they're kept for that (see "Timing
+trips with the phone's points"). For older trips, they were deleted from Dawarich and are only in
+`deleted-points/`. This keeps those recorded during each trip as its phone fixes, so the next run converts
+the trip and sends it again (which loses its transport mode corrections in Dawarich). Running it again is
+harmless.
+
+```sh
+docker compose exec dawarich-track-fixer python -m trackfixer phone-fixes-from-backups   # dry run
+docker compose exec dawarich-track-fixer python -m trackfixer phone-fixes-from-backups --apply
+```
+
 ## Development
 
 ```sh
