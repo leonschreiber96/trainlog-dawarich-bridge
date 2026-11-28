@@ -5,10 +5,16 @@ Each check returns a list of warning messages (empty if all is well).
 
 from datetime import datetime
 
+from .converter import distance_meters
 from .phone_points import is_trip_point, tracker_id_for_trip
 
 # Dawarich's default "minutes between routes": phone points closer in time than this can end up in one track.
 TRACK_GAP_SECONDS = 30 * 60
+
+# Trip points without a track this close to the tracked ones next to them are a stop that Dawarich
+# leaves out of its tracks (see untracked_points_outside_stops). Dawarich's stop radius is at least
+# 100 m; this leaves room for a larger visit radius in its settings.
+STOP_RADIUS_METERS = 200
 
 
 def looks_like_shortcut_point(point):
@@ -79,7 +85,7 @@ def trip_track_problem(trip_name, trip_uid, route, points_around_trip):
     if not trip_points:
         return None
     noise = [point for point in trip_points if point.get("anomaly")]
-    untracked = [point for point in trip_points if not point.get("anomaly") and point.get("track_id") is None]
+    untracked = untracked_points_outside_stops(trip_points)
     if len(noise) > len(trip_points) / 2:
         return (f"Dawarich flagged {len(noise)} of the {len(trip_points)} points of {trip_name} as GPS noise, "
                 "so it isn't shown as a track.", False)
@@ -101,6 +107,41 @@ def trip_track_problem(trip_name, trip_uid, route, points_around_trip):
         return (f"The phone's track ran in a straight line across {trip_name}: Dawarich didn't cut it where "
                 "the trip is.", True)
     return None
+
+
+def untracked_points_outside_stops(trip_points):
+    """The trip's points (not GPS noise) that belong to no track, except where the ride stood still.
+
+    Dawarich leaves the points of a stop out of its tracks on purpose: where points stay within its
+    stop radius (100 m, or the visit radius in its settings if larger) for 5 minutes or more, the
+    track ends and a new one starts when the ride leaves. That also happens to a trip's points, e.g.
+    at a station where the train waits 10 minutes, or a bus leaving late. Nothing of the trip is
+    missing from the map then, and neither sending the points again nor recalculating changes it.
+
+    So a run of untracked points is left out if all of them lie within STOP_RADIUS_METERS of the
+    tracked trip points next to it (on both sides, or the one side at the trip's start or end)."""
+    points = sorted((point for point in trip_points if not point.get("anomaly")),
+                    key=lambda point: point["timestamp"])
+    untracked = []
+    run_start = None
+    for index, point in enumerate(points + [None]):
+        if point is not None and point.get("track_id") is None:
+            if run_start is None:
+                run_start = index
+            continue
+        if run_start is not None:
+            run = points[run_start:index]
+            neighbours = [neighbour for neighbour in (points[run_start - 1] if run_start else None, point)
+                          if neighbour is not None]
+            if not neighbours or any(distance_meters(position(stopped), position(neighbour)) > STOP_RADIUS_METERS
+                                     for stopped in run for neighbour in neighbours):
+                untracked += run
+            run_start = None
+    return untracked
+
+
+def position(point):
+    return [float(point["longitude"]), float(point["latitude"])]
 
 
 def format_local_time(timestamp):

@@ -81,6 +81,29 @@ class TripTrackCheckTest(unittest.TestCase):
                       description)
         self.assertTrue(resending_can_fix_it)
 
+    def test_stop_left_out_of_the_tracks_is_fine(self):
+        # As Dawarich did with a 10 minute wait at Dortmund Hbf: the track ends on arriving, the
+        # point of leaving belongs to no track, and a new track starts with the next point.
+        middle = len(self.trip_points) // 2
+        before, after = self.trip_points[:middle + 1], self.trip_points[middle + 1:]
+        leaving = dict(before[-1], timestamp=(before[-1]["timestamp"] + after[0]["timestamp"]) // 2, track_id=None)
+        after = [dict(point, track_id=self.TRIP_TRACK + 10) for point in after]
+        self.assertIsNone(self.check(self.walk_to_the_stop + before + [leaving] + after + self.canteen))
+
+    def test_stop_at_the_end_left_out_of_the_tracks_is_fine(self):
+        # Waiting at the destination, a few meters from the last tracked point.
+        last = self.trip_points[-1]
+        waiting = [dict(last, timestamp=last["timestamp"] + seconds, track_id=None,
+                        latitude=last["latitude"] + 0.0005) for seconds in (300, 360)]
+        self.assertIsNone(self.check(self.walk_to_the_stop + self.trip_points + waiting + self.canteen))
+
+    def test_untracked_point_away_from_a_stop_still_counts(self):
+        middle = len(self.trip_points) // 2
+        trip_points = list(self.trip_points)
+        trip_points[middle] = dict(trip_points[middle], track_id=None, latitude=trip_points[middle]["latitude"] + 0.01)
+        description, _ = self.check(self.walk_to_the_stop + trip_points + self.canteen)
+        self.assertIn(f"1 of the {len(trip_points)} points of the bus ride belonged to no track", description)
+
     def test_trip_flagged_as_gps_noise_is_not(self):
         trip_points = [dict(point, track_id=None, anomaly=True) for point in self.trip_points]
         description, resending_can_fix_it = self.check(self.walk_to_the_stop + trip_points + self.canteen)
