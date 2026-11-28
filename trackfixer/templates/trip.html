@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}{{ trip.origin }} → {{ trip.destination }} · Track fixer{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  #map { height: 58vh; min-height: 320px; border-radius: 10px; border: 1px solid var(--border); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; margin: 8px 0 0; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+                         margin-right: 6px; background: var(--dot); vertical-align: -1px; }
+  .legend .line::before { width: 16px; height: 0; border-radius: 0; border-top: 2px dashed var(--dot); background: none; vertical-align: 3px; }
+  tr.fix { cursor: pointer; }
+  tr.fix:hover td { background: var(--background); }
+  tr.fix.contradicts td:first-child { box-shadow: inset 3px 0 0 #e03131; }
+  tr.fix.used td:first-child { box-shadow: inset 3px 0 0 #2b8a3e; }
+  .filters label { display: flex; gap: 6px; align-items: center; }
+</style>
+{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('trips') }}">← Trips</a></p>
+<div class="card">
+  <h2 style="margin-top: 0">{{ trip.origin }} → {{ trip.destination }}</h2>
+  <dl>
+    <dt>Start</dt><dd>{{ trip.start_datetime[:16] if trip.start_datetime else "" }} · {{ trip.trip_type }}</dd>
+    <dt>Status</dt><dd><span class="badge {{ trip.status }}">{{ trip_status_labels.get(trip.status, trip.status) }}</span>
+      {% if trip.sent_at %}<span class="muted">sent {{ trip.sent_at | local_time }}, {{ trip.sent_point_count }} points</span>{% endif %}</dd>
+    {% if trip.status_detail %}<dt>Notes</dt><dd>{{ trip.status_detail }}</dd>{% endif %}
+    <dt>trainlog uid</dt><dd>{{ trip.uid }}</dd>
+  </dl>
+</div>
+
+{% if error %}
+<div class="flash error-message" style="margin-top: 16px">This trip can't be converted: {{ error }}</div>
+{% else %}
+
+<h2>Map</h2>
+<div id="map"></div>
+<div class="legend muted">
+  <span style="--dot: #7048e8">route (trainlog)</span>
+  <span style="--dot: #9a9a94">stops with a time (white circles, a dark ring if realtime)</span>
+  <span style="--dot: #2b8a3e">phone points that time the trip</span>
+  <span style="--dot: #e03131">phone points contradicting a realtime stop time</span>
+  <span style="--dot: #2f6fdb">phone points not needed (trainlog's times were close enough)</span>
+  <span style="--dot: #9a9a94">phone points not used (at a stop, or unusable)</span>
+  <span class="line" style="--dot: #e03131">from a phone point to where trainlog's times have the ride at that moment</span>
+</div>
+
+<h2>Phone points ({{ timing.fixes | length }})</h2>
+{% if timing.fixes %}
+<p class="muted">
+  "trainlog's times" are the trip's start and end and its stops with a time, with the time in between spread by
+  distance, before any phone point is used; "the trip's times" also use the phone points that time it (green).
+  A stop's minute counts as its middle (:30). "phone +1:05" means the phone was there 1 minute 5 seconds later.
+  Click a row to show the point on the map.
+</p>
+<div class="filters">
+  <label><input type="checkbox" id="only-relevant" checked> Only points that time the trip or contradict a stop</label>
+</div>
+<div class="table-wrapper">
+<table>
+  <tr>
+    <th>Phone time</th><th>What became of it</th><th class="number">Accuracy</th><th class="number">Along the route</th>
+    <th>trainlog's times have the ride there at</th><th>The trip's times (as timed with phone points)</th><th>Why</th>
+  </tr>
+  {% for fix in timing.fixes %}
+  <tr class="fix {{ 'contradicts' if fix.status.startswith('contradicts') else fix.status | replace(' ', '-') }}"
+      data-index="{{ loop.index0 }}"
+      data-relevant="{{ 'yes' if fix.status == 'used' or fix.status.startswith('contradicts') or fix.contradicted_stops else 'no' }}">
+    <td class="nowrap">{{ fix.timestamp | clock_time }}</td>
+    <td>{{ fix.status }}</td>
+    <td class="number">{{ fix.accuracy | distance if fix.accuracy is not none else "" }}</td>
+    <td class="number nowrap">{{ fix.meters | distance if fix.meters is not none else "off the route" }}</td>
+    <td class="nowrap">{% if fix.trainlog_time is not none %}{{ fix.trainlog_time | clock_time }}
+      <span class="muted">(phone {{ (fix.timestamp - fix.trainlog_time) | seconds_off }})</span>{% endif %}</td>
+    <td class="nowrap">{% if fix.timed_time is not none %}{{ fix.timed_time | clock_time }}
+      <span class="muted">(phone {{ (fix.timestamp - fix.timed_time) | seconds_off }})</span>{% endif %}</td>
+    <td>
+      {% for stop in fix.contradicted_stops %}
+        {% if stop.side == "before" %}
+          Still {{ stop.meters_away | distance }} before {{ stop.name }}, but trainlog has the ride arrive there at {{ stop.time | clock_time }}.
+        {% else %}
+          Already {{ stop.meters_away | distance }} past {{ stop.name }}, but trainlog has the ride leave there only at {{ stop.time | clock_time }}.
+        {% endif %}
+      {% endfor %}
+      <span class="muted">{{ fix.why }}</span>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p id="nothing-relevant" class="muted" hidden>No phone point times the trip or contradicts a stop. Untick the box to see all.</p>
+{% else %}
+<p class="muted">No phone points were kept for this trip.</p>
+{% endif %}
+
+<h2>Stops with a time ({{ timing.stops | length }})</h2>
+<div class="table-wrapper">
+<table>
+  <tr><th>Stop</th><th class="number">Along the route</th><th>Arrival</th><th>Departure</th><th>Times</th></tr>
+  <tr><td>{{ trip.origin }} (start)</td><td class="number">0 m</td><td></td>
+      <td>{{ timing.start | clock_time }}</td><td class="muted">delay included</td></tr>
+  {% for stop in timing.stops %}
+  <tr>
+    <td>{{ stop.name }}</td>
+    <td class="number">{{ stop.meters | distance }}</td>
+    <td>{{ stop.arrival | clock_time }}</td>
+    <td>{{ stop.departure | clock_time if stop.departure != stop.arrival else "" }}</td>
+    <td>{% if stop.realtime %}realtime{% else %}<span class="muted">scheduled</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  <tr><td>{{ trip.destination }} (end)</td><td class="number">{{ timing.total_meters | distance }}</td>
+      <td>{{ timing.end | clock_time }}</td><td></td><td class="muted">delay included</td></tr>
+</table>
+</div>
+
+<script>
+(() => {
+  const timing = {{ timing | tojson }};
+  const COLORS = {route: '#7048e8', used: '#2b8a3e', contradicts: '#e03131', notNeeded: '#2f6fdb', other: '#9a9a94'};
+  const colorOf = (fix) => fix.status === 'used' ? COLORS.used
+    : fix.status.startsWith('contradicts') || fix.contradicted_stops.length ? COLORS.contradicts
+    : fix.status === 'not needed' ? COLORS.notNeeded : COLORS.other;
+  const pad = (number) => String(number).padStart(2, '0');
+  const clock = (timestamp) => {
+    const date = new Date(timestamp * 1000);
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  };
+
+  const map = L.map('map', {preferCanvas: true});
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+  const routeLine = L.polyline(timing.route, {color: COLORS.route, weight: 5, opacity: 0.7}).addTo(map);
+  map.fitBounds(routeLine.getBounds(), {padding: [20, 20]});
+
+  for (const stop of timing.stops) {
+    const times = stop.departure !== stop.arrival
+      ? `arrives ${clock(stop.arrival)}, leaves ${clock(stop.departure)}` : clock(stop.arrival);
+    L.circleMarker([stop.latitude, stop.longitude], {
+      radius: 6, color: stop.realtime ? '#1d1d1b' : '#9a9a94', weight: stop.realtime ? 3 : 1.5,
+      fillColor: '#fff', fillOpacity: 1,
+    }).bindTooltip(`${stop.name}: ${times} (${stop.realtime ? 'realtime' : 'scheduled'})`).addTo(map);
+  }
+
+  const markers = timing.fixes.map((fix) => {
+    const color = colorOf(fix);
+    const relevant = color === COLORS.used || color === COLORS.contradicts;
+    if (relevant && fix.trainlog_latitude !== null) {
+      L.polyline([[fix.latitude, fix.longitude], [fix.trainlog_latitude, fix.trainlog_longitude]],
+                 {color, weight: 2, dashArray: '5 5', opacity: 0.9, interactive: false}).addTo(map);
+    }
+    const offBy = fix.trainlog_time === null ? ''
+      : ` · trainlog's times: ${clock(fix.trainlog_time)} (${Math.round(fix.timestamp - fix.trainlog_time)} s)`;
+    return L.circleMarker([fix.latitude, fix.longitude], {
+      radius: relevant ? 6 : 4, color, weight: 1.5, fillColor: color, fillOpacity: relevant ? 0.85 : 0.4,
+    }).bindTooltip(`${clock(fix.timestamp)} · ${fix.status}${offBy}`
+                   + (fix.accuracy !== null ? ` · ±${Math.round(fix.accuracy)} m` : '')).addTo(map);
+  });
+
+  document.querySelectorAll('tr.fix').forEach((row) => {
+    row.addEventListener('click', () => {
+      const marker = markers[Number(row.dataset.index)];
+      map.setView(marker.getLatLng(), Math.max(map.getZoom(), 15));
+      marker.openTooltip();
+      document.getElementById('map').scrollIntoView({behavior: 'smooth', block: 'center'});
+    });
+  });
+
+  const onlyRelevant = document.getElementById('only-relevant');
+  if (onlyRelevant) {
+    const filter = () => {
+      let shown = 0;
+      document.querySelectorAll('tr.fix').forEach((row) => {
+        row.hidden = onlyRelevant.checked && row.dataset.relevant !== 'yes';
+        if (!row.hidden) shown += 1;
+      });
+      document.getElementById('nothing-relevant').hidden = shown > 0;
+    };
+    onlyRelevant.addEventListener('change', filter);
+    filter();
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}

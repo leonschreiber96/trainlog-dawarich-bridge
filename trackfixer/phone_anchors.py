@@ -27,6 +27,7 @@ is converted, so editing a drawn route, or more fixes arriving late, chooses aga
   So a ride that went as planned gets no anchors and converts as before.
 """
 
+import bisect
 import math
 from typing import NamedTuple
 
@@ -142,14 +143,8 @@ def assess_phone_fixes(row, fixes):
 
     def times_with(selected):
         """(The trip's timeline with these fixes as anchors, those of them left out for contradicting a stop)."""
-        new_route, new_distances, exact, new_index_of_vertex = insert_exact_anchor_vertices(
-            route, distance_along_route, [[candidate.timestamp, candidate.meters] for candidate in selected])
-        stops = [stop._replace(index=new_index_of_vertex[stop.index]) for stop in basis.stops]
-        new_end = end._replace(index=len(new_route) - 1)
-        kept_stops, kept_exact, _ = combine_anchors(start, new_end, stops, exact, new_distances)
-        kept_times = {anchor.time for anchor in kept_exact}
-        left_out = [candidate for candidate in selected if candidate.timestamp not in kept_times]
-        return timeline(start, new_end, kept_stops, kept_exact, new_distances), left_out
+        times, left_out = timeline_with(basis, [[candidate.timestamp, candidate.meters] for candidate in selected])
+        return times, [candidate for candidate in selected if candidate.timestamp in left_out]
 
     selected, remaining = [], list(chain)
     while True:
@@ -176,6 +171,94 @@ def assess_phone_fixes(row, fixes):
     return [[candidate.timestamp, round(candidate.meters, 1)] for candidate in selected], statuses
 
 
+def explain_phone_fixes(row, fixes):
+    """For looking at a trip's timing by hand (the trip page): its route and stops, and for each phone fix
+    what became of it, where it is along the route, when trainlog's own times (start, end, stops, without
+    any phone fix) and the trip's times (with the phone fixes it's timed with) have the ride there, and
+    which realtime stop times it contradicts.
+    Raises ValueError if the trip can't be converted."""
+    exact_anchors, statuses = assess_phone_fixes(row, fixes)
+    basis = trip_basis(row, [])
+    route, distance_along_route = basis.route, basis.distance_along_route
+    start = Anchor(0, basis.start, ENDPOINT)
+    end = Anchor(len(route) - 1, basis.end, ENDPOINT)
+    times = timeline(start, end, basis.stops, [], distance_along_route)
+    timed_times = timeline_with(basis, exact_anchors)[0] if exact_anchors else times
+    route_index = RouteIndex(route, distance_along_route)
+
+    stops = [
+        {"name": stay.name or f"Stop {number}", "meters": distance_along_route[stay.index],
+         "latitude": route[stay.index][1], "longitude": route[stay.index][0],
+         "arrival": stay.arrival, "departure": stay.departure, "realtime": stay.realtime}
+        for number, stay in enumerate(basis.stays, 1)
+    ]
+
+    explained = []
+    for fix in sorted(fixes, key=lambda fix: fix["timestamp"]):
+        timestamp = int(fix["timestamp"])
+        accuracy = float(fix["accuracy"]) if fix.get("accuracy") is not None else None
+        inside = basis.start < timestamp < basis.end
+        meters = route_index.meters_along([float(fix["longitude"]), float(fix["latitude"])],
+                                          meters_at(times, timestamp)) if inside else None
+        trainlog_time = time_at(times, meters) if meters is not None else None
+        place_then = position_at(route, distance_along_route, meters_at(times, timestamp)) if inside else None
+        status = statuses.get(timestamp, UNUSABLE)
+        explained.append({
+            "timestamp": timestamp, "latitude": float(fix["latitude"]), "longitude": float(fix["longitude"]),
+            "accuracy": accuracy, "status": status,
+            "why": why_unusable(timestamp, accuracy, inside, meters, trainlog_time) if status == UNUSABLE else "",
+            "meters": meters, "trainlog_time": trainlog_time,
+            # when the trip's times, with the phone fixes it's timed with, have the ride there
+            "timed_time": time_at(timed_times, meters) if meters is not None else None,
+            # where trainlog's times have the ride when the phone recorded the fix
+            "trainlog_latitude": place_then[1] if place_then else None,
+            "trainlog_longitude": place_then[0] if place_then else None,
+            "contradicted_stops": contradicted_stops(timestamp, meters, stops) if meters is not None else [],
+        })
+
+    return {"route": [[latitude, longitude] for longitude, latitude in route], "start": basis.start,
+            "end": basis.end, "total_meters": distance_along_route[-1], "stops": stops, "fixes": explained}
+
+
+def why_unusable(timestamp, accuracy, inside_trip_time, meters, trainlog_time):
+    if accuracy is None:
+        return "no accuracy (not from the Dawarich app)"
+    if not inside_trip_time:
+        return "outside the trip's time"
+    if meters is None:
+        return f"more than {MAX_DISTANCE_FROM_ROUTE_METERS:.0f} m from the route"
+    if accuracy > MAX_ACCURACY_METERS and abs(trainlog_time - timestamp) > INACCURATE_MAX_TIME_OFF_SECONDS:
+        return (f"less accurate than {MAX_ACCURACY_METERS:.0f} m, and more than "
+                f"{INACCURATE_MAX_TIME_OFF_SECONDS // 60:.0f} minutes off trainlog's times")
+    return "too fast from or to the other phone points, or going back along the route"
+
+
+def contradicted_stops(timestamp, meters, stops):
+    """The realtime stop times a fix can't be in order with (as combine_anchors decides it): the phone
+    was still before the stop after trainlog's minute of arriving there, or already past it
+    before trainlog's minute of leaving it."""
+    contradicted = []
+    for stop in stops:
+        if not stop["realtime"]:
+            continue
+        if meters < stop["meters"] and math.ceil(timestamp) >= math.floor(stop["arrival"] + ANCHOR_TIME_WINDOW_SECONDS):
+            contradicted.append({"name": stop["name"], "meters_away": stop["meters"] - meters,
+                                 "side": "before", "time": stop["arrival"]})
+        elif meters > stop["meters"] and math.ceil(stop["departure"]) >= math.floor(timestamp):
+            contradicted.append({"name": stop["name"], "meters_away": meters - stop["meters"],
+                                 "side": "past", "time": stop["departure"]})
+    return contradicted
+
+
+def position_at(route, distance_along_route, meters):
+    """[longitude, latitude] of the place this many meters along the route."""
+    index = min(max(bisect.bisect_right(distance_along_route, meters), 1), len(route) - 1)
+    before, after = distance_along_route[index - 1], distance_along_route[index]
+    share = 0.0 if after == before else min(1.0, max(0.0, (meters - before) / (after - before)))
+    return [route[index - 1][0] + share * (route[index][0] - route[index - 1][0]),
+            route[index - 1][1] + share * (route[index][1] - route[index - 1][1])]
+
+
 def waiting_at_a_stop(basis, timestamp, meters, accuracy):
     """Was the fix recorded near a stop between the ride's arrival and departure there?"""
     return any(
@@ -183,6 +266,20 @@ def waiting_at_a_stop(basis, timestamp, meters, accuracy):
         and stay.arrival <= timestamp <= stay.departure + ANCHOR_TIME_WINDOW_SECONDS
         for stay in basis.stays
     )
+
+
+def timeline_with(basis, exact_anchors):
+    """(The trip's timeline with these exact anchors ([[timestamp, meters along the route], ...]),
+    the timestamps of those left out for contradicting a realtime stop time)."""
+    new_route, new_distances, exact, new_index_of_vertex = insert_exact_anchor_vertices(
+        basis.route, basis.distance_along_route, exact_anchors)
+    stops = [stop._replace(index=new_index_of_vertex[stop.index]) for stop in basis.stops]
+    start = Anchor(0, basis.start, ENDPOINT)
+    end = Anchor(len(new_route) - 1, basis.end, ENDPOINT)
+    kept_stops, kept_exact, _ = combine_anchors(start, end, stops, exact, new_distances)
+    kept_times = {anchor.time for anchor in kept_exact}
+    left_out = {timestamp for timestamp, _ in exact_anchors if timestamp not in kept_times}
+    return timeline(start, end, kept_stops, kept_exact, new_distances), left_out
 
 
 def timeline(start, end, stops, exact, distance_along_route):

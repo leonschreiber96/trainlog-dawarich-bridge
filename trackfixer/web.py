@@ -3,6 +3,7 @@
 There's no login: the app is meant to be reachable only through a VPN.
 """
 
+import json
 import os
 from datetime import datetime
 
@@ -13,7 +14,7 @@ from .converter import trip_time_range
 from .dawarich import DawarichClient, DawarichError
 from .drawn_trips import (DRAWN_TRIP_TYPES, drawn_trips_for_list, form_values_for_editing,
                           stored_values_for_editing, trip_from_form)
-from .phone_anchors import assess_phone_fixes, fixes_from_points
+from .phone_anchors import assess_phone_fixes, explain_phone_fixes, fixes_from_points
 from .phone_points import DRAWN_TRIP_UID_PREFIX, is_drawn_trip, is_trip_point, tracker_id_for_trip
 from .scheduler import next_nightly_run
 
@@ -46,6 +47,25 @@ def create_app(settings):
         if not iso_text:
             return ""
         return datetime.fromisoformat(iso_text).astimezone().strftime("%Y-%m-%d %H:%M")
+
+    @app.template_filter("clock_time")
+    def clock_time(timestamp):
+        if timestamp is None:
+            return ""
+        return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+    @app.template_filter("seconds_off")
+    def seconds_off(seconds):
+        """+1:05 / -0:30"""
+        if seconds is None:
+            return ""
+        whole = round(abs(seconds))
+        sign = "" if whole == 0 else "-" if seconds < 0 else "+"
+        return f"{sign}{whole // 60}:{whole % 60:02d}"
+
+    @app.template_filter("distance")
+    def distance(meters):
+        return f"{meters / 1000:.1f} km" if meters >= 1000 else f"{meters:.0f} m"
 
     @app.template_filter("timestamp_local_time")
     def timestamp_local_time(timestamp):
@@ -108,6 +128,21 @@ def create_app(settings):
             selected_status=status,
             trip_counts=database.trip_counts_by_status(),
         )
+
+    @app.get("/trips/<uid>")
+    def trip_details(uid):
+        """How a trainlog trip is timed: its stops and the phone points kept for it, on a map."""
+        trip = database.get_trip(uid)
+        if trip is None:
+            abort(404)
+        if is_drawn_trip(uid):
+            return redirect(url_for("edit_drawn_trip", drawn_trip_id=drawn_trip_id_of(uid)))
+        try:
+            timing = explain_phone_fixes(json.loads(trip["csv_row"]), database.phone_fixes(uid))
+            error = None
+        except ValueError as problem:
+            timing, error = None, str(problem)
+        return render_template("trip.html", trip=trip, timing=timing, error=error)
 
     @app.get("/drawn-trips")
     def drawn_trips():

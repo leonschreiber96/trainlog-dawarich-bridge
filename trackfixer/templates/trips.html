@@ -19,7 +19,7 @@
   <tr>
     <td class="nowrap">{{ trip.start_datetime[:16] if trip.start_datetime and trip.start_datetime|length > 2 else "" }}</td>
     <td>{{ trip.trip_type }}</td>
-    <td>{% if drawn_trip_id_of(trip.uid) is not none and trip.status != "removed" %}<a href="{{ url_for('edit_drawn_trip', drawn_trip_id=drawn_trip_id_of(trip.uid)) }}">{{ trip.origin }} → {{ trip.destination }}</a> <span class="muted">(drawn)</span>{% else %}{{ trip.origin }} → {{ trip.destination }}{% endif %}</td>
+    <td>{% if drawn_trip_id_of(trip.uid) is not none and trip.status != "removed" %}<a href="{{ url_for('edit_drawn_trip', drawn_trip_id=drawn_trip_id_of(trip.uid)) }}">{{ trip.origin }} → {{ trip.destination }}</a> <span class="muted">(drawn)</span>{% else %}<a href="{{ url_for('trip_details', uid=trip.uid) }}">{{ trip.origin }} → {{ trip.destination }}</a>{% endif %}</td>
     <td><span class="badge {{ trip.status }}">{{ trip_status_labels.get(trip.status, trip.status) }}</span></td>
     <td class="number">{{ trip.sent_point_count or "" }}</td>
     <td class="number">{{ trip.phone_points_deleted or "" }}</td>

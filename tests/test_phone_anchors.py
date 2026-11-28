@@ -1,12 +1,16 @@
+import json
 import math
 import unittest
 from datetime import datetime, timezone
 
 from trackfixer.converter import convert_trip, distance_meters
-from trackfixer.phone_anchors import (AT_A_STOP, CONTRADICTS_STOP, IGNORED, NOT_NEEDED, UNUSABLE, USED,
-                                      assess_phone_fixes, choose_exact_anchors, fixes_from_points)
+from trackfixer import database
+from trackfixer.phone_anchors import (AT_A_STOP, CONTRADICTS_STOP, IGNORED, MIN_DEVIATION_SECONDS, NOT_NEEDED,
+                                      UNUSABLE, USED, assess_phone_fixes, choose_exact_anchors, explain_phone_fixes,
+                                      fixes_from_points)
+from trackfixer.web import create_app
 
-from .helpers import APP_TRACKER_ID, encode_path, meters_to_latitude_longitude
+from .helpers import APP_TRACKER_ID, encode_path, meters_to_latitude_longitude, temporary_settings
 from .test_converter import meters_before, position_at, s_bahn_trip_row, utc, waiting_at_hauptbahnhof
 
 # A car ride with a traffic jam, modelled on a real one (made-up place and times, UTC):
@@ -218,6 +222,56 @@ class PhoneAnchorTest(unittest.TestCase):
         ]
         self.assertEqual([fix["timestamp"] for fix in fixes_from_points(points, START, END)],
                          [START + 60, START + 180, START + 240])
+
+
+class TripTimingPageTest(unittest.TestCase):
+    """The trip page shows where phone points and trainlog's stop times disagree."""
+
+    def setUp(self):
+        # 3 minutes after trainlog has the S-Bahn at Hauptbahnhof, the phone puts it 20 m before it.
+        row = s_bahn_trip_row(tiergarten_time="2026-11-12 09:05:00")
+        waypoints = json.loads(row["waypoints"])
+        waypoints[0]["stop"]["name"] = "Berlin Hauptbahnhof"
+        self.row = dict(row, waypoints=json.dumps(waypoints))
+        longitude, latitude = position_at(self.row, meters_before("Hauptbahnhof", self.row, 20))
+        self.fix = {"timestamp": int(utc("2026-11-12 09:00:27")), "latitude": latitude, "longitude": longitude,
+                    "accuracy": 14}
+
+    def test_explains_which_stop_time_a_phone_point_contradicts(self):
+        timing = explain_phone_fixes(self.row, [self.fix])
+
+        self.assertEqual([stop["name"] for stop in timing["stops"]], ["Berlin Hauptbahnhof", "Stop 2"])
+        [fix] = timing["fixes"]
+        self.assertEqual(fix["status"], CONTRADICTS_STOP)
+        [stop] = fix["contradicted_stops"]
+        self.assertEqual((stop["name"], stop["side"], stop["time"]), ("Berlin Hauptbahnhof", "before",
+                                                                     utc("2026-11-12 08:57:00")))
+        self.assertAlmostEqual(stop["meters_away"], 20, delta=1)
+        # trainlog's times have the ride 20 m before the stop a few seconds before 08:57:30 (the middle of the
+        # stop's minute), the phone 3 minutes later.
+        self.assertAlmostEqual(fix["timestamp"] - fix["trainlog_time"], 181, delta=2)
+        self.assertEqual(fix["timed_time"], fix["trainlog_time"])  # nothing times the trip
+
+    def test_explains_how_phone_points_time_the_trip(self):
+        timing = explain_phone_fixes(car_row(), fixes_of_the_ride())
+        used = [fix for fix in timing["fixes"] if fix["status"] == USED]
+        self.assertTrue(used)
+        # In the traffic jam, trainlog's times are minutes off the phone, the trip's times aren't.
+        self.assertGreater(max(abs(fix["timestamp"] - fix["trainlog_time"]) for fix in used), 5 * 60)
+        for fix in timing["fixes"]:
+            if fix["status"] in (USED, NOT_NEEDED):
+                self.assertLessEqual(abs(fix["timestamp"] - fix["timed_time"]), MIN_DEVIATION_SECONDS + 1)
+
+    def test_trip_page(self):
+        settings = temporary_settings()
+        client = create_app(settings).test_client()
+        database.save_trip(self.row, "fingerprint", database.IN_DAWARICH)
+        database.add_phone_fixes(self.row["uid"], [self.fix])
+
+        page = client.get(f"/trips/{self.row['uid']}").get_data(as_text=True)
+        self.assertIn("Still 20 m before Berlin Hauptbahnhof, but trainlog has the ride arrive there at", page)
+        self.assertIn(f'href="/trips/{self.row["uid"]}"', client.get("/trips").get_data(as_text=True))
+        self.assertEqual(client.get("/trips/unknown").status_code, 404)
 
 
 if __name__ == "__main__":

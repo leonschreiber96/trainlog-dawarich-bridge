@@ -75,6 +75,7 @@ class Stay(NamedTuple):
     arrival: float
     departure: float  # the same as arrival, unless the ride left in a later minute
     realtime: bool
+    name: str = ""  # as trainlog has it, if it does (only shown on the trip page)
 
 
 class TripBasis(NamedTuple):
@@ -351,9 +352,14 @@ def stays_at_stops(row, route, scheduled_start, scheduled_end, departure_delay, 
             warnings.append("Waypoint ignored: same route vertex as previous anchor or trip endpoint")
             continue
 
-        stays.append(Stay(nearest_index, arrival, departure, is_realtime))
+        stays.append(Stay(nearest_index, arrival, departure, is_realtime, stop_name(waypoint)))
         previous_index = nearest_index
     return stays
+
+
+def stop_name(waypoint):
+    stop = waypoint.get("stop") or {}
+    return str(stop.get("name") or waypoint.get("name") or stop.get("station") or "").strip()
 
 
 def has_time(stop, key):
